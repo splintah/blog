@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Using Emacs in a local Nix environment - Splinter Suidman</title>
+    <link rel="stylesheet" href="../css/default.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">
+        <a href="../">Splinter Suidman</a>
+      </div>
+      <nav>
+        <a href="../">Home</a>
+        <a href="../about.html">About</a>
+        <a href="../feeds.html">Feeds</a>
+      </nav>
+    </header>
+
+    <main role="main">
+      <article>
+  <h1>Using Emacs in a local Nix environment</h1>
+  <section class="header">
+    13 April 2020
+    
+  </section>
+  
+  <section>
+    <p>In this blog post, I explain how to use Emacs in a local Nix environment for all modes, without needing mode-specific configuration.</p>
+<hr />
+<p>Recently, I was trying to get <a href="https://github.com/haskell/haskell-mode"><code>haskell-mode</code></a> in Emacs to work inside a (local) Nix environment, à la <code>nix-shell</code>. I use Nix to manage my Haskell dependencies<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>. Those dependencies aren’t installed globally (or rather, aren’t in my <code>$PATH</code>), and I don’t want them to be installed by Cabal, so building the project and running GHCI should happen inside a Nix environment.</p>
+<p>With <code>haskell-mode</code>, you can run the function <code>haskell-process-load-file</code> to run GHCI inside Emacs. If you set <code>haskell-process-type</code> to <code>'cabal-repl</code> (or <code>'cabal-new-repl</code>), GHCI will use Cabal to manage dependencies, but it will run <code>cabal</code> in your <code>$PATH</code>, or the program specified in <code>haskell-process-path-cabal</code>.</p>
+<h2 id="wrapper-script">Wrapper script</h2>
+<p>So I created a script with the following contents:</p>
+<div class="sourceCode" id="cb1" data-org-language="sh"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1"></a><span class="va">args=$@</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a><span class="ex">nix-shell</span> --run <span class="st">&quot;cabal </span><span class="va">$args</span><span class="st">&quot;</span></span></code></pre></div>
+<p>…, and set <code>haskell-process-path-cabal</code> to the path to the script.</p>
+<p>This works quite well, but isn’t very elegant.</p>
+<h2 id="wrapper-function">Wrapper function</h2>
+<p>Then I discovered the <code>haskell-mode</code> option <code>haskell-process-wrapper-function</code>, which ‘wraps or transforms Haskell process commands (…)’, according to the documentation. The documentation even contains an example value which makes the process commands run inside a <code>nix-shell</code> (simplified a bit here):</p>
+<div class="sourceCode" id="cb2" data-org-language="emacs-lisp"><pre class="sourceCode commonlisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1"></a>(<span class="kw">setq</span> haskell-process-wrapper-function</span>
+<span id="cb2-2"><a href="#cb2-2"></a>      (<span class="kw">lambda</span> (argv)</span>
+<span id="cb2-3"><a href="#cb2-3"></a>        (<span class="kw">list</span> <span class="st">&quot;nix-shell&quot;</span></span>
+<span id="cb2-4"><a href="#cb2-4"></a>              <span class="st">&quot;-I&quot;</span></span>
+<span id="cb2-5"><a href="#cb2-5"></a>              <span class="st">&quot;.&quot;</span></span>
+<span id="cb2-6"><a href="#cb2-6"></a>              <span class="st">&quot;--command&quot;</span></span>
+<span id="cb2-7"><a href="#cb2-7"></a>              (mapconcat 'identity argv <span class="st">&quot; &quot;</span>))))</span></code></pre></div>
+<p>This is works well, and is a lot more elegant than the script above. But it only works for <code>haskell-mode</code>: when I want to run Python with packages managed by Nix inside Emacs, I’ll have to search <code>python-mode</code> for an option similar to <code>haskell-process-wrapper-function</code>. And when I want to use yet another language, …</p>
+<h2 id="lorri-and-direnv">lorri and direnv</h2>
+<p>So I tried to find a general solution, and found <a href="https://github.com/target/lorri">lorri</a>. lorri integrates <a href="https://direnv.net">direnv</a> with Nix. With lorri, you don’t need <code>nix-shell</code> anymore, since direnv automatically changes your path, and lorri automatically builds your shell environment. (See the <a href="https://github.com/target/lorri#demo">lorri demonstration</a>.)</p>
+<p>The direnv home page explains how to install a direnv hook into your shell, but you can also add direnv to Emacs: the <a href="https://github.com/wbolster/emacs-direnv">emacs-direnv</a> package adds direnv support. It’s as simple as adding the following to your Emacs configuration (if you use <a href="https://github.com/jwiegley/use-package"><code>use-package</code></a>):</p>
+<div class="sourceCode" id="cb3" data-org-language="emacs-lisp"><pre class="sourceCode commonlisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1"></a>(<span class="kw">use-package</span> direnv</span>
+<span id="cb3-2"><a href="#cb3-2"></a>  :config</span>
+<span id="cb3-3"><a href="#cb3-3"></a>  (direnv-mode))</span></code></pre></div>
+<p>If you now visit a file in a directory where lorri is initialised, your environment variables will be updated, and you can run all sorts of processes (<code>haskell-mode</code>’s GHCI, <code>python-mode</code>’s REPL, <code>eshell</code>, etc.) inside a Nix environment.</p>
+<p>direnv changes the environment variables (such as <code>$PATH</code>) that were generated by lorri in a local directory. Because your <code>$PATH</code> is changed when you visit a file in that directory, there is no need for any mode-specific Emacs configuration.</p>
+<section class="footnotes" role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1" role="doc-endnote"><p>Read how to do this in the <a href="https://nixos.org/nixpkgs/manual/#how-to-create-nix-builds-for-your-own-private-haskell-packages">Nixpkgs manual</a>.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+  </section>
+</article>
+
+    </main>
+
+    <footer>
+      Site proudly generated by
+      <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+    </footer>
+
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  </body>
+</html>

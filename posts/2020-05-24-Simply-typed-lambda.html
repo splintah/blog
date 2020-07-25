@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simply typed lambda calculus - Splinter Suidman</title>
+    <link rel="stylesheet" href="../css/default.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">
+        <a href="../">Splinter Suidman</a>
+      </div>
+      <nav>
+        <a href="../">Home</a>
+        <a href="../about.html">About</a>
+        <a href="../feeds.html">Feeds</a>
+      </nav>
+    </header>
+
+    <main role="main">
+      <article>
+  <h1>Simply typed lambda calculus</h1>
+  <section class="header">
+    24 May 2020
+    
+  </section>
+  
+    <section class="series-info">
+      This post is part 2 of 4 of the series <a href="../series/Introduction%20to%20Type%20Systems.html">Introduction to Type Systems</a>.
+    </section>
+  
+  <section>
+    <p>Our exploration of type systems starts quite simple, with the <em>simply typed lambda calculus</em> (STLC). This type system is the foundation of more complex type systems such as Haskell’s. The simply typed lambda calculus is based on the <em>(untyped) lambda calculus</em>. To understand the simply typed lambda calculus, you do <em>not</em> have to understand the untyped lambda calculus, but it could be beneficial, as I will refer to some of its properties. If you want to read about the untyped lambda calculus, the following articles might be helpful:</p>
+<ul>
+<li><a href="https://afnan.io/posts/lambda-calculus/"><em>Lambda Calculus</em> by Afnan Enayet</a></li>
+<li><a href="https://crypto.stanford.edu/~blynn/lambda/"><em>Lambda Calculus</em> by Ben Lynn</a></li>
+</ul>
+<details>
+<p><summary>Imports etc.</summary></p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1"></a><span class="kw">module</span> <span class="dt">SimplyTyped</span> <span class="kw">where</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a></span>
+<span id="cb1-3"><a href="#cb1-3"></a><span class="kw">import</span>           <span class="dt">Control.Monad</span>   (when)</span>
+<span id="cb1-4"><a href="#cb1-4"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.Map.Strict</span> <span class="kw">as</span> <span class="dt">Map</span></span>
+<span id="cb1-5"><a href="#cb1-5"></a><span class="kw">import</span>           <span class="dt">Data.Map.Strict</span> (<span class="dt">Map</span>)</span></code></pre></div>
+</details>
+<h2 id="syntax">Syntax</h2>
+<p>The syntax of a (programming) language describes how the language is written. The syntax of the simply typed lambda calculus consists of two things: <em>terms</em> and <em>types</em>.</p>
+<h3 id="types">Types</h3>
+<p>One major difference between the untyped lambda calculus and the simply typed, is that the latter has a notion of <em>types</em>. The STLC contains two different sorts of types:</p>
+<ol type="1">
+<li><em>Function types</em>. We write the type of a function that accepts a parameter of type <span class="math inline">\(\tau\)</span> and returns a value of type <span class="math inline">\(\tau'\)</span> as <span class="math inline">\(\tau \rightarrow \tau'\)</span>. The identity function on booleans, for example, accepts a parameter of type <span class="math inline">\(\mathsf{Bool}\)</span> (boolean), and returns a value of the same type. Its type is thus written as <span class="math inline">\(\mathsf{Bool} \rightarrow \mathsf{Bool}\)</span>. We also add that the function arrow is <em>right-associative</em>: <span class="math inline">\(\tau \rightarrow \tau' \rightarrow \tau''\)</span> is the same as <span class="math inline">\(\tau \rightarrow (\tau' \rightarrow \tau'')\)</span>.</li>
+<li><em>Simple types</em> (also called <em>constant types</em>). These types are what makes the STLC the simply typed lambda calculus. The simple types are the types of the constant values: <code>True</code> has type <code>Bool</code> (boolean), <code>8</code> has type <code>Int</code> (integer), et cetera.</li>
+</ol>
+<p>We can choose the simple types however we like. Here, we’ll use booleans and integers, and add the if-then-else construct and addition. Adding operations like subtraction, multiplication, etc., is very straight-forward when you know how to handle addition, so I won’t explicitly explain how they work.</p>
+<p>In more formal syntax, we write:</p>
+<p><span class="math display">\[
+\begin{align*}
+  \tau ::=\ &amp; \tau \rightarrow \tau' &amp; \text{(function type)} \\
+      \mid\ &amp; \mathsf{Bool} &amp; \text{(boolean type)} \\
+      \mid\ &amp; \mathsf{Int} &amp; \text{(integer type)}
+\end{align*}
+\]</span></p>
+<p>You can read the symbol <span class="math inline">\(::=\)</span> as ‘<em>is defined by the following rules</em>’. The symbol <span class="math inline">\(\mid\)</span> separates rules, and you can read it as ‘<em>or</em>’. The grammar description starts with a <span class="math inline">\(\tau\)</span> (Greek letter tau, commonly used for denoting types); whenever you see a <span class="math inline">\(\tau\)</span> or a <span class="math inline">\(\tau\)</span> with any number of primes (which are used to make clear that these types may differ), it means that the syntax ‘expects’ another type there. The syntax of types is thus defined recursively. (This notation of grammars is called <a href="https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_form">Backus-Naur form</a> (BNF).)</p>
+<p>Translating such a syntax definition to Haskell is quite easy. We define a type called <code>Type</code>, which contains the <a href="https://en.wikipedia.org/wiki/Abstract_syntax_tree"><em>abstract syntax tree</em></a> (AST) for types. The AST does not directly correspond to the actual syntax of the types; we don’t encode in the AST how whitespace should be handled, how comments are written, that the function arrow is right-associative, etc. That’s why it’s called an <em>abstract</em> syntax tree. The Haskell data type for the AST of types looks like this:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1"></a><span class="kw">data</span> <span class="dt">Type</span></span>
+<span id="cb2-2"><a href="#cb2-2"></a>  <span class="ot">=</span> <span class="dt">TyFun</span> <span class="dt">Type</span> <span class="dt">Type</span></span>
+<span id="cb2-3"><a href="#cb2-3"></a>    <span class="co">-- ^ Function type. The type @TyFun ty1 ty2@</span></span>
+<span id="cb2-4"><a href="#cb2-4"></a>    <span class="co">-- corresponds to @ty1 -&gt; ty2@.</span></span>
+<span id="cb2-5"><a href="#cb2-5"></a>  <span class="op">|</span> <span class="dt">TyBool</span></span>
+<span id="cb2-6"><a href="#cb2-6"></a>    <span class="co">-- ^ Boolean type</span></span>
+<span id="cb2-7"><a href="#cb2-7"></a>  <span class="op">|</span> <span class="dt">TyInt</span></span>
+<span id="cb2-8"><a href="#cb2-8"></a>    <span class="co">-- ^ Integer type</span></span>
+<span id="cb2-9"><a href="#cb2-9"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+<h3 id="terms">Terms</h3>
+<p>There are five sorts of terms in the STLC. These are based on the terms of the untyped lambda calculus, with some additions: the syntax for lambda abstractions is a bit different and values and computation constructs are added. The terms of the STLC consist of:</p>
+<ol type="1">
+<li><p><em>Variables</em>. These are names for values. We generally use strings of characters as variable names, but we could just as well use integers<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>.</p>
+<p>What strings are valid variable names is not very important here, since we aren’t writing a parser. Variable names generally consist of alphanumeric characters, starting with an alphabetic character. We’ll use this as an informal rule.</p></li>
+<li><p><em>(Lambda) abstractions</em>. Lambda abstractions (or in short: abstractions) are functions. They accept one<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a> parameter and return a value. We write them like in the untyped lambda calculus, but add the type of the parameter.</p>
+<p>The identity function on booleans, <span class="math inline">\(\mathsf{id}_\mathsf{Bool}\)</span>, for example, is written like <span class="math inline">\(\lambda x : \mathsf{Bool}. x\)</span>. (Or, in more Haskell-like syntax: <code>\x : Bool. x</code>.) This function accepts a boolean parameter named <span class="math inline">\(x\)</span>. In the return value (which is written after the period), we can use the variable name <span class="math inline">\(x\)</span> to refer to the value that was <em>bound</em> (i.e., introduced) by the abstraction.</p></li>
+<li><p><em>Applications</em>. This is just function application. We write it using juxtaposition: <span class="math inline">\(f\)</span> applied to <span class="math inline">\(x\)</span> is written as <span class="math inline">\(f\ x\)</span>. Applications only really make sense when the left value is an abstraction (or a term that evaluates to one).</p></li>
+<li><p><em>(Constant) values</em>. These are values like integers (<code>3</code>), booleans (<code>True</code>), characters (<code>'f'</code>) et cetera. These values cannot be evaluated any further, and are pretty useless on their own, so we also need:</p></li>
+<li><p><em>Computation constructs</em>. These are terms like conditionals (<code>if a then b else c</code>), binary operations (<code>x + y</code>), et cetera. The key aspect of these constructs is that they have some sense of computation: <code>if True then a else b</code> should evaluate to <code>a</code>, <code>5 + 6</code> should evaluate to <code>11</code>. We add these terms to the lambda calculus when adding simple types, because without them, we can’t ‘do anything’ with the values we added.</p></li>
+</ol>
+<p>More formally, we describe the grammar of terms as follows:</p>
+<p><span class="math display">\[
+\begin{align*}
+  t ::=\ &amp; \mathsf{False} &amp; \text{(false)} \\
+   \mid\ &amp; \mathsf{True} &amp; \text{(true)} \\
+   \mid\ &amp; n &amp; \text{(integer)} \\
+   \mid\ &amp; x &amp; \text{(variable)} \\
+   \mid\ &amp; \lambda x : \tau.\ t &amp; \text{(lambda abstraction)} \\
+   \mid\ &amp; t\ t' &amp; \text{(application)} \\
+   \mid\ &amp; t + t' &amp; \text{(addition)} \\
+   \mid\ &amp; \mathbf{if}\ t\ \mathbf{then}\ t'\ \mathbf{else}\ t'' &amp; \text{(if-then-else)}
+\end{align*}
+\]</span></p>
+<p>We write <span class="math inline">\(x\)</span> for variables, without explicitly defining what <span class="math inline">\(x\)</span> can be. And for integers we write <span class="math inline">\(n\)</span>, also without explicitly specifying what valid values of <span class="math inline">\(n\)</span> are. That’s because, as explained above, it doesn’t really matter what set of strings we allow as variable names for reasoning about programs. And it also doesn’t matter that much whether we use 32-bit, 64-bit, signed, unsigned, or unbounded integers.</p>
+<p>Again, writing the Haskell definition is quite easy:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb3-1"><a href="#cb3-1"></a><span class="kw">data</span> <span class="dt">Term</span></span>
+<span id="cb3-2"><a href="#cb3-2"></a>  <span class="ot">=</span> <span class="dt">TmTrue</span></span>
+<span id="cb3-3"><a href="#cb3-3"></a>    <span class="co">-- ^ True value</span></span>
+<span id="cb3-4"><a href="#cb3-4"></a>  <span class="op">|</span> <span class="dt">TmFalse</span></span>
+<span id="cb3-5"><a href="#cb3-5"></a>    <span class="co">-- ^ False value</span></span>
+<span id="cb3-6"><a href="#cb3-6"></a>  <span class="op">|</span> <span class="dt">TmInt</span> <span class="dt">Integer</span></span>
+<span id="cb3-7"><a href="#cb3-7"></a>    <span class="co">-- ^ Integer value</span></span>
+<span id="cb3-8"><a href="#cb3-8"></a>  <span class="op">|</span> <span class="dt">TmVar</span> <span class="dt">String</span></span>
+<span id="cb3-9"><a href="#cb3-9"></a>    <span class="co">-- ^ Variable</span></span>
+<span id="cb3-10"><a href="#cb3-10"></a>  <span class="op">|</span> <span class="dt">TmAbs</span> <span class="dt">String</span> <span class="dt">Type</span> <span class="dt">Term</span></span>
+<span id="cb3-11"><a href="#cb3-11"></a>    <span class="co">-- ^ Lambda abstraction. @TmAbs x ty t@</span></span>
+<span id="cb3-12"><a href="#cb3-12"></a>    <span class="co">-- corresponds to @\x : ty. t@.</span></span>
+<span id="cb3-13"><a href="#cb3-13"></a>  <span class="op">|</span> <span class="dt">TmApp</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb3-14"><a href="#cb3-14"></a>    <span class="co">-- ^ Application</span></span>
+<span id="cb3-15"><a href="#cb3-15"></a>  <span class="op">|</span> <span class="dt">TmAdd</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb3-16"><a href="#cb3-16"></a>    <span class="co">-- ^ Addition</span></span>
+<span id="cb3-17"><a href="#cb3-17"></a>  <span class="op">|</span> <span class="dt">TmIf</span> <span class="dt">Term</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb3-18"><a href="#cb3-18"></a>    <span class="co">-- ^ If-then-else conditional</span></span>
+<span id="cb3-19"><a href="#cb3-19"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+<h3 id="examples">Examples</h3>
+<p>Let’s look at some examples. The abstract syntax tree of the identity function on booleans, which we’ve seen before, is written like this in Haskell:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb4-1"><a href="#cb4-1"></a><span class="ot">tmIdBool ::</span> <span class="dt">Term</span></span>
+<span id="cb4-2"><a href="#cb4-2"></a>tmIdBool <span class="ot">=</span> <span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyBool</span> (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>)</span></code></pre></div>
+<p>Another example is the <code>not</code> function, which inverts its boolean argument: <span class="math inline">\(\lambda x : \mathsf{Bool}. \mathbf{if}\ x\ \mathbf{then}\ \mathsf{False}\ \mathbf{else}\ \mathsf{True}\)</span>. In Haskell:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb5-1"><a href="#cb5-1"></a><span class="ot">tmNot ::</span> <span class="dt">Term</span></span>
+<span id="cb5-2"><a href="#cb5-2"></a>tmNot <span class="ot">=</span> <span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyBool</span> (<span class="dt">TmIf</span> (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>) <span class="dt">TmFalse</span> <span class="dt">TmTrue</span>)</span></code></pre></div>
+<p>A function that adds its two arguments: <span class="math inline">\(\lambda x : \mathsf{Int}. \lambda y : \mathsf{Int}. x + y\)</span>. In Haskell:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb6-1"><a href="#cb6-1"></a><span class="ot">tmAdd ::</span> <span class="dt">Term</span></span>
+<span id="cb6-2"><a href="#cb6-2"></a>tmAdd <span class="ot">=</span> <span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyInt</span> (<span class="dt">TmAbs</span> <span class="st">&quot;y&quot;</span> <span class="dt">TyInt</span> (<span class="dt">TmAdd</span> (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>) (<span class="dt">TmVar</span> <span class="st">&quot;y&quot;</span>)))</span></code></pre></div>
+<p>And its type, <span class="math inline">\(\mathsf{Int} \rightarrow \mathsf{Int} \rightarrow \mathsf{Int}\)</span>, which is the same as <span class="math inline">\(\mathsf{Int} \rightarrow (\mathsf{Int} \rightarrow \mathsf{Int})\)</span>, is in Haskell:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb7-1"><a href="#cb7-1"></a><span class="ot">tyAdd ::</span> <span class="dt">Type</span></span>
+<span id="cb7-2"><a href="#cb7-2"></a>tyAdd <span class="ot">=</span> <span class="dt">TyFun</span> <span class="dt">TyInt</span> (<span class="dt">TyFun</span> <span class="dt">TyInt</span> <span class="dt">TyInt</span>)</span></code></pre></div>
+<p>Now we know the syntax of terms and types, we can move on to the relation between the two.</p>
+<h2 id="type-checking">Type checking</h2>
+<p>A type checker checks that all values are used correctly, i.e., that they have the right type. Type checking is useful, because it can help us spot mistakes in our program. Without a type checker, if we were to evaluate the expression <span class="math inline">\(1 + \mathsf{True}\)</span>, the program would crash; it does not make sense to add a boolean and an integer. A type checker can prevent the program from crashing, because it will reject faulty programs before they are interpreted or compiled.</p>
+<p>To express that a term has a certain type, we use a <em>typing judgement</em>. The judgement will look something like this in mathematical notation: <span class="math inline">\(\Gamma \vdash t : \tau\)</span>. You can read it as: <em>the context <span class="math inline">\(\Gamma\)</span> entails that <span class="math inline">\(t\)</span> has type <span class="math inline">\(\tau\)</span></em>.</p>
+<p>The <em>context</em> is a set of <em>bindings</em>: variables and their types. Contexts are generally written like this:</p>
+<ul>
+<li><span class="math inline">\(\varnothing\)</span> denotes the empty context;</li>
+<li><span class="math inline">\(\Gamma, x : \tau\)</span> denotes the context <span class="math inline">\(\Gamma\)</span> extended with <span class="math inline">\(x\)</span> and its type <span class="math inline">\(\tau\)</span>.</li>
+</ul>
+<p>The context <span class="math inline">\(\varnothing, x : \mathsf{Bool}, f : \mathsf{Bool} \rightarrow \mathsf{Int}\)</span> contains two bindings: the boolean <span class="math inline">\(x\)</span> and the boolean-to-integer function <span class="math inline">\(f\)</span>.</p>
+<p>We can combine typing judgements to form <em>typing rules</em>. We use <a href="https://en.wikipedia.org/wiki/Rule_of_inference"><em>inference rules</em></a> to make statements about how to reason about terms and types. These inference rules consist of a number of premises, a horizontal bar, and the conclusion. An example is <em>modus ponens</em>:</p>
+<p><span class="math display">\[
+  \frac{
+    \begin{array}{c}
+      A \\
+      A \rightarrow B
+    \end{array}
+  }{
+    B
+  }
+\]</span></p>
+<p>You can read this as: <em>if we have <span class="math inline">\(A\)</span> and <span class="math inline">\(A \rightarrow B\)</span> </em>(if <span class="math inline">\(A\)</span> then <span class="math inline">\(B\)</span>)<em>, then we conclude <span class="math inline">\(B\)</span>.</em></p>
+<p>We use this notation for typing rules. The most simple rules are the rules for boolean and integer values:</p>
+<p><span class="math display">\[
+  \text{T-True: } \frac{}{\varnothing \vdash \mathsf{True} : \mathsf{Bool}}
+\]</span></p>
+<p>T-True is the name of the rule. This rule has no premises, and states that we can conclude in an empty context that <span class="math inline">\(\mathsf{True}\)</span> has type <span class="math inline">\(\mathsf{Bool}\)</span>.</p>
+<p>Instead of writing <span class="math inline">\(\varnothing \vdash t : \tau\)</span>, the <span class="math inline">\(\varnothing\)</span> is usually omitted: <span class="math inline">\(\vdash t : \tau\)</span>. So, the rule for <span class="math inline">\(\mathsf{False}\)</span> is:</p>
+<p><span class="math display">\[
+  \text{T-False: } \frac{}{\vdash \mathsf{False} : \mathsf{Bool}}
+\]</span></p>
+<p>And the rule for integers:</p>
+<p><span class="math display">\[
+  \text{T-Int: } \frac{}{\vdash n : \mathsf{Int}}
+\]</span></p>
+<p>Now let’s write some more complex rules. To find the type of variables, we look them up in the context. To denote that <span class="math inline">\(x\)</span> has type <span class="math inline">\(\tau\)</span> in <span class="math inline">\(\Gamma\)</span>, we write: <span class="math inline">\(x : \tau \in \Gamma\)</span>. So, the rule for variables is:</p>
+<p><span class="math display">\[
+  \text{T-Var: } \frac{
+    x : \tau \in \Gamma
+  }{
+    \Gamma \vdash x : \tau
+  }
+\]</span></p>
+<p>The rule for lambda abstractions looks like this:</p>
+<p><span class="math display">\[
+  \text{T-Abs: } \frac{
+    \Gamma, x : \tau \vdash t : \tau'
+  }{
+    \Gamma \vdash \lambda x : \tau. t : \tau \rightarrow \tau'
+  }
+\]</span></p>
+<p>To type check abstractions, we add <span class="math inline">\(x : \tau\)</span> to the context (because <span class="math inline">\(t\)</span> might use <span class="math inline">\(x\)</span>) and check the type of <span class="math inline">\(t\)</span>. We then know that the abstraction takes an argument of type <span class="math inline">\(\tau\)</span> and has a return type of the type of <span class="math inline">\(t\)</span>.</p>
+<p>For applications, we need to have a term with a function type on the left side, that accepts an argument with the type of the right side:</p>
+<p><span class="math display">\[
+  \text{T-App: } \frac{
+    \begin{array}{c}
+      \Gamma \vdash t : \tau \rightarrow \tau' \\
+      \Gamma \vdash t' : \tau
+    \end{array}
+  }{
+    \Gamma \vdash t\ t' : \tau'
+  }
+\]</span></p>
+<p>For an addition, we require that the two operands are both integers. The type of the addition is then also an integer:</p>
+<p><span class="math display">\[
+  \text{T-Add: } \frac{
+    \begin{array}{c}
+      \Gamma \vdash t : \mathsf{Int} \\
+      \Gamma \vdash t' : \mathsf{Int}
+    \end{array}
+  }{
+    \Gamma \vdash t + t' : \mathsf{Int}
+  }
+\]</span></p>
+<p>When typing if-then-else terms, we expect the condition to be a boolean, and the two arms to have the same type:</p>
+<p><span class="math display">\[
+  \text{T-If: } \frac{
+    \begin{array}{c}
+      \Gamma \vdash t_1 : \mathsf{Bool} \\
+      \Gamma \vdash t_2 : \tau \\
+      \Gamma \vdash t_3 : \tau
+    \end{array}
+  }{
+    \Gamma \vdash \mathbf{if}\ t_1\ \mathbf{then}\ t_2\ \mathbf{else}\ t_3 : \tau
+  }
+\]</span></p>
+<p>These are all the typing rules we will be working with.</p>
+<p>To determine the type of a more complex term, we can combine the typing rules. The type of <span class="math inline">\(\lambda n : \mathsf{Int}. 3 + n\)</span>, for example, is determined as follows:</p>
+<p><span class="math display">\[
+  \text{T-Abs: } \dfrac{
+    \text{T-Add: } \dfrac{
+      \text{T-Int: } \dfrac{}{
+        \vdash 3 : \mathsf{Int}
+      } \quad
+      \text{T-Var: } \dfrac{
+        n : \mathsf{Int} \in \varnothing, n : \mathsf{Int}
+      }{
+        \varnothing, n : \mathsf{Int} \vdash n : \mathsf{Int}
+      }
+    }{
+      \varnothing, n : \mathsf{Int} \vdash 3 + n : \mathsf{Int}
+    }
+  }{
+    \vdash \lambda n : \mathsf{Int}. 3 + n : \mathsf{Int} \rightarrow \mathsf{Int}
+  }
+\]</span></p>
+<p>Using these rules, we can implement a type checker in Haskell.</p>
+<h3 id="implementation">Implementation</h3>
+<p>For the context, we’ll use a <code>Map</code>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb8-1"><a href="#cb8-1"></a><span class="kw">type</span> <span class="dt">Context</span> <span class="ot">=</span> <span class="dt">Map</span> <span class="dt">String</span> <span class="dt">Type</span></span></code></pre></div>
+<p>The function <code>typeOf</code> will determine the type of a term in a certain context, or will throw a type error. Its type is:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb9-1"><a href="#cb9-1"></a><span class="ot">typeOf ::</span> <span class="dt">Context</span> <span class="ot">-&gt;</span> <span class="dt">Term</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> <span class="dt">TypeError</span> <span class="dt">Type</span></span></code></pre></div>
+<details>
+<p><summary>The definition of <code>TypeError</code></summary></p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb10-1"><a href="#cb10-1"></a><span class="kw">data</span> <span class="dt">TypeError</span></span></code></pre></div>
+<p>The variable was not bound by a lambda abstraction.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb11-1"><a href="#cb11-1"></a>  <span class="ot">=</span> <span class="dt">UnboundVariable</span> <span class="dt">String</span></span></code></pre></div>
+<p>An operand of an addition term was not an integer.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb12-1"><a href="#cb12-1"></a>  <span class="op">|</span> <span class="dt">AdditionNonInteger</span> <span class="dt">Term</span> <span class="dt">Type</span></span></code></pre></div>
+<p>The condition of an if-then-else term is not a boolean.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb13-1"><a href="#cb13-1"></a>  <span class="op">|</span> <span class="dt">NonBooleanCondition</span> <span class="dt">Term</span> <span class="dt">Type</span></span></code></pre></div>
+<p>The arms of an if-then-else term have different types.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb14-1"><a href="#cb14-1"></a>  <span class="op">|</span> <span class="dt">ArmsOfDifferentType</span> <span class="dt">Term</span> <span class="dt">Type</span> <span class="dt">Term</span> <span class="dt">Type</span></span></code></pre></div>
+<p>A function is applied to an argument of the wrong type.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb15-1"><a href="#cb15-1"></a>  <span class="op">|</span> <span class="dt">ApplicationWrongArgumentType</span> <span class="dt">Term</span> <span class="dt">Type</span> <span class="dt">Term</span> <span class="dt">Type</span></span></code></pre></div>
+<p>A term of a non-function type is the left part of an application.</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb16-1"><a href="#cb16-1"></a>  <span class="op">|</span> <span class="dt">ApplicationNotFunction</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb16-2"><a href="#cb16-2"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>)</span></code></pre></div>
+</details>
+<p>The rules for boolean and integer values are really easy to implement:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb17-1"><a href="#cb17-1"></a>typeOf ctx <span class="dt">TmTrue</span>    <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb17-2"><a href="#cb17-2"></a>typeOf ctx <span class="dt">TmFalse</span>   <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb17-3"><a href="#cb17-3"></a>typeOf ctx (<span class="dt">TmInt</span> n) <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>We can implement T-Var with a simple lookup:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb18-1"><a href="#cb18-1"></a>typeOf ctx (<span class="dt">TmVar</span> x) <span class="ot">=</span></span>
+<span id="cb18-2"><a href="#cb18-2"></a>  <span class="kw">case</span> Map.lookup x ctx <span class="kw">of</span></span>
+<span id="cb18-3"><a href="#cb18-3"></a>    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">UnboundVariable</span> x</span>
+<span id="cb18-4"><a href="#cb18-4"></a>    <span class="dt">Just</span> ty <span class="ot">-&gt;</span> <span class="dt">Right</span> ty</span></code></pre></div>
+<p>For lambda abstractions, …</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb19-1"><a href="#cb19-1"></a>typeOf ctx (<span class="dt">TmAbs</span> x ty t) <span class="ot">=</span></span></code></pre></div>
+<p>…, we add <code>x</code> with the type <code>ty</code> to the context, and determine the type of <code>t</code> in the new context, …</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb20-1"><a href="#cb20-1"></a>  <span class="kw">let</span> ctx' <span class="ot">=</span> Map.insert x ty ctx</span>
+<span id="cb20-2"><a href="#cb20-2"></a>      ty'  <span class="ot">=</span> typeOf ctx' t</span></code></pre></div>
+<p>…, and return the function type from <code>ty</code> to <code>ty'</code>:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb21-1"><a href="#cb21-1"></a>   <span class="kw">in</span> <span class="dt">TyFun</span> ty <span class="op">&lt;$&gt;</span> ty'</span></code></pre></div>
+<p>(Note that <code>TyFun ty &lt;$&gt; ty'</code> is the same as:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb22-1"><a href="#cb22-1"></a><span class="kw">case</span> typeOf ctx' t <span class="kw">of</span></span>
+<span id="cb22-2"><a href="#cb22-2"></a>  <span class="dt">Left</span> e    <span class="ot">-&gt;</span> <span class="dt">Left</span> e</span>
+<span id="cb22-3"><a href="#cb22-3"></a>  <span class="dt">Right</span> ty' <span class="ot">-&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> ty ty')</span></code></pre></div>
+<p>But using the fact that <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Either"><code>Either</code></a> is a <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Functor"><code>Functor</code></a> allows us to use <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#v:fmap"><code>fmap</code></a>, or the infix version <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#v:-60--36--62-"><code>(&lt;$&gt;)</code></a>. This is more succinct that an explicit <code>case</code>-<code>of</code>.</p>
+<p>In this <code>case</code>-<code>of</code> expression, <code>ty'</code> has type <code>Type</code>, but above <code>ty' :: Either TypeError Type</code>.)</p>
+<p>For type checking applications, we use the fact that <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Either"><code>Either</code></a> is a <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Monad"><code>Monad</code></a>, and use the <a href="https://wiki.haskell.org/Keywords#do"><code>do</code>-notation</a>:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb23-1"><a href="#cb23-1"></a>typeOf ctx (<span class="dt">TmApp</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span></code></pre></div>
+<p>We first determine the types of <code>t1</code> and <code>t2</code>:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb24-1"><a href="#cb24-1"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb24-2"><a href="#cb24-2"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span></code></pre></div>
+<p>The type of <code>t1</code> should be a function type:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb25-1"><a href="#cb25-1"></a>  <span class="kw">case</span> ty1 <span class="kw">of</span></span>
+<span id="cb25-2"><a href="#cb25-2"></a>    <span class="dt">TyFun</span> ty11 ty12 <span class="ot">-&gt;</span></span></code></pre></div>
+<p>And the type of <code>t2</code> should be the same as <code>t1</code>’s argument’s type, <code>ty11</code>:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb26-1"><a href="#cb26-1"></a>      <span class="kw">if</span> ty2 <span class="op">==</span> ty11</span>
+<span id="cb26-2"><a href="#cb26-2"></a>        <span class="kw">then</span> <span class="dt">Right</span> ty12</span>
+<span id="cb26-3"><a href="#cb26-3"></a>        <span class="kw">else</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationWrongArgumentType</span> t1 ty1 t2 ty2</span></code></pre></div>
+<p>If <code>t1</code> doesn’t have a function type, then we can’t apply it:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb27-1"><a href="#cb27-1"></a>    _ <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationNotFunction</span> t1 ty1</span></code></pre></div>
+<p>For addition, if the two operands are integers, then the result is too:</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb28-1"><a href="#cb28-1"></a>typeOf ctx (<span class="dt">TmAdd</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb28-2"><a href="#cb28-2"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb28-3"><a href="#cb28-3"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb28-4"><a href="#cb28-4"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t1 ty1</span>
+<span id="cb28-5"><a href="#cb28-5"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb28-6"><a href="#cb28-6"></a>  when (ty2 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb28-7"><a href="#cb28-7"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t2 ty2</span>
+<span id="cb28-8"><a href="#cb28-8"></a>  <span class="dt">Right</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>We can also prevent duplication:</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb29-1"><a href="#cb29-1"></a>typeOf ctx (<span class="dt">TmAdd</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb29-2"><a href="#cb29-2"></a>  check t1</span>
+<span id="cb29-3"><a href="#cb29-3"></a>  check t2</span>
+<span id="cb29-4"><a href="#cb29-4"></a>  <span class="dt">Right</span> <span class="dt">TyInt</span></span>
+<span id="cb29-5"><a href="#cb29-5"></a>  <span class="kw">where</span></span>
+<span id="cb29-6"><a href="#cb29-6"></a>    check t <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb29-7"><a href="#cb29-7"></a>      ty <span class="ot">&lt;-</span> typeOf ctx t</span>
+<span id="cb29-8"><a href="#cb29-8"></a>      when (ty <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb29-9"><a href="#cb29-9"></a>        <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t ty</span></code></pre></div>
+<p>When type checking if-then-else terms, we want the condition to be a boolean, and the arms to be of the same type:</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb30-1"><a href="#cb30-1"></a>typeOf ctx (<span class="dt">TmIf</span> t1 t2 t3) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb30-2"><a href="#cb30-2"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb30-3"><a href="#cb30-3"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyBool</span>) <span class="op">$</span></span>
+<span id="cb30-4"><a href="#cb30-4"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">NonBooleanCondition</span> t1 ty1</span>
+<span id="cb30-5"><a href="#cb30-5"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb30-6"><a href="#cb30-6"></a>  ty3 <span class="ot">&lt;-</span> typeOf ctx t3</span>
+<span id="cb30-7"><a href="#cb30-7"></a>  when (ty2 <span class="op">/=</span> ty3) <span class="op">$</span></span>
+<span id="cb30-8"><a href="#cb30-8"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ArmsOfDifferentType</span> t2 ty2 t3 ty3</span>
+<span id="cb30-9"><a href="#cb30-9"></a>  <span class="dt">Right</span> ty2</span></code></pre></div>
+<p>And that’s it! We’ve now implemented our type checker. Let’s try it!</p>
+<h3 id="examples-1">Examples</h3>
+<p>Let’s start with some terms we have already defined. The type of the identity function on booleans, <span class="math inline">\(\mathsf{id}_\mathsf{Bool}\)</span>, is:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb31-1"><a href="#cb31-1"></a>typeOf Map.empty tmIdBool</span>
+<span id="cb31-2"><a href="#cb31-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyBool</span>)</span></code></pre></div>
+<p>We see that type checking has been successful, since we’ve got a <code>Right</code> value back. And the type is indeed what we were expecting: <span class="math inline">\(\mathsf{Bool} \rightarrow \mathsf{Bool}\)</span>.</p>
+<p>Let’s also define the identity functions on boolean-to-integer functions:</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb32-1"><a href="#cb32-1"></a><span class="ot">tmIdBoolToInt ::</span> <span class="dt">Term</span></span>
+<span id="cb32-2"><a href="#cb32-2"></a>tmIdBoolToInt <span class="ot">=</span> <span class="dt">TmAbs</span> <span class="st">&quot;f&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) (<span class="dt">TmVar</span> <span class="st">&quot;f&quot;</span>)</span></code></pre></div>
+<p>We expect its type to be <span class="math inline">\((\mathsf{Bool} \rightarrow \mathsf{Int}) \rightarrow (\mathsf{Bool} \rightarrow \mathsf{Int})\)</span>, and indeed:</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb33-1"><a href="#cb33-1"></a>typeOf Map.empty tmIdBoolToInt</span>
+<span id="cb33-2"><a href="#cb33-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>))</span></code></pre></div>
+<p>The type of <span class="math inline">\(\mathsf{not}\)</span> should be <span class="math inline">\(\mathsf{Bool} \rightarrow \mathsf{Bool}\)</span>:</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb34-1"><a href="#cb34-1"></a>typeOf Map.empty tmNot</span>
+<span id="cb34-2"><a href="#cb34-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyBool</span>)</span></code></pre></div>
+<p>And the type of <span class="math inline">\(\mathsf{add}\)</span> should be <span class="math inline">\(\mathsf{Int} \rightarrow \mathsf{Int} \rightarrow \mathsf{Int}\)</span>:</p>
+<div class="sourceCode" id="cb35"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb35-1"><a href="#cb35-1"></a>typeOf Map.empty tmAdd</span>
+<span id="cb35-2"><a href="#cb35-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> <span class="dt">TyInt</span> (<span class="dt">TyFun</span> <span class="dt">TyInt</span> <span class="dt">TyInt</span>))</span></code></pre></div>
+<p>So far, so good. Let’s also take a look at terms that should be rejected.</p>
+<p>We expect our type checker to reject the term <span class="math inline">\(\mathsf{True} + 1\)</span>, since we can’t add booleans and integers:</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb36-1"><a href="#cb36-1"></a>typeOf Map.empty (<span class="dt">TmAdd</span> <span class="dt">TmTrue</span> (<span class="dt">TmInt</span> <span class="dv">1</span>))</span>
+<span id="cb36-2"><a href="#cb36-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span> (<span class="dt">AdditionNonInteger</span> <span class="dt">TmTrue</span> <span class="dt">TyBool</span>)</span></code></pre></div>
+<p>Hurray, one mistake prevented!</p>
+<p>We can’t refer to variables that are not bound:</p>
+<div class="sourceCode" id="cb37"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb37-1"><a href="#cb37-1"></a>typeOf Map.empty (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>)</span>
+<span id="cb37-2"><a href="#cb37-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span> (<span class="dt">UnboundVariable</span> <span class="st">&quot;x&quot;</span>)</span></code></pre></div>
+<p>But if the variable is defined in the context, that should be no problem:</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb38-1"><a href="#cb38-1"></a>typeOf (Map.fromList [(<span class="st">&quot;x&quot;</span>, <span class="dt">TyInt</span>)]) (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>)</span>
+<span id="cb38-2"><a href="#cb38-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>We should also reject <span class="math inline">\(\mathsf{not}\ 14\)</span>, because <span class="math inline">\(\mathsf{not}\)</span> expects a boolean parameter:</p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb39-1"><a href="#cb39-1"></a>typeOf Map.empty (<span class="dt">TmApp</span> tmNot (<span class="dt">TmInt</span> <span class="dv">14</span>))</span>
+<span id="cb39-2"><a href="#cb39-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span></span>
+<span id="cb39-3"><a href="#cb39-3"></a>      (<span class="dt">ApplicationWrongArgumentType</span></span>
+<span id="cb39-4"><a href="#cb39-4"></a>        (<span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyBool</span> (<span class="dt">TmIf</span> (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>) <span class="dt">TmFalse</span> <span class="dt">TmTrue</span>))</span>
+<span id="cb39-5"><a href="#cb39-5"></a>        (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyBool</span>)</span>
+<span id="cb39-6"><a href="#cb39-6"></a>        (<span class="dt">TmInt</span> <span class="dv">14</span>)</span>
+<span id="cb39-7"><a href="#cb39-7"></a>        <span class="dt">TyInt</span>)</span></code></pre></div>
+<p>It would be nice to display these errors more user-friendly, but that’s left as an exercise to the reader!</p>
+<p>Let’s try applying to a non-function value:</p>
+<div class="sourceCode" id="cb40"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb40-1"><a href="#cb40-1"></a>typeOf Map.empty (<span class="dt">TmApp</span> <span class="dt">TmFalse</span> (<span class="dt">TmInt</span> <span class="dv">21</span>))</span>
+<span id="cb40-2"><a href="#cb40-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span> (<span class="dt">ApplicationNotFunction</span> <span class="dt">TmFalse</span> <span class="dt">TyBool</span>)</span></code></pre></div>
+<p>And if-then-else terms with a non-boolean condition:</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb41-1"><a href="#cb41-1"></a>typeOf Map.empty (<span class="dt">TmIf</span> (<span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyBool</span> (<span class="dt">TmInt</span> <span class="dv">0</span>)) (<span class="dt">TmInt</span> <span class="dv">3</span>) (<span class="dt">TmInt</span> <span class="dv">4</span>))</span>
+<span id="cb41-2"><a href="#cb41-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span></span>
+<span id="cb41-3"><a href="#cb41-3"></a>       (<span class="dt">NonBooleanCondition</span></span>
+<span id="cb41-4"><a href="#cb41-4"></a>         (<span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> <span class="dt">TyBool</span> (<span class="dt">TmInt</span> <span class="dv">0</span>))</span>
+<span id="cb41-5"><a href="#cb41-5"></a>         (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>))</span></code></pre></div>
+<p>Or with non-matching arms:</p>
+<div class="sourceCode" id="cb42"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb42-1"><a href="#cb42-1"></a>typeOf Map.empty (<span class="dt">TmIf</span> <span class="dt">TmTrue</span> (<span class="dt">TmInt</span> <span class="dv">10</span>) <span class="dt">TmFalse</span>)</span>
+<span id="cb42-2"><a href="#cb42-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Left</span> (<span class="dt">ArmsOfDifferentType</span> (<span class="dt">TmInt</span> <span class="dv">10</span>) <span class="dt">TyInt</span> <span class="dt">TmFalse</span> <span class="dt">TyBool</span>)</span></code></pre></div>
+<h2 id="conclusion">Conclusion</h2>
+<p>We’ve written a type checker for the simply typed lambda calculus!</p>
+<p>If you want to a play a bit more with this type checker, you might want to do one of the following exercises, which I highly suggest:</p>
+<ol type="1">
+<li>Add other binary operators on integers, such as subtraction, multiplication, etc. Extend the abstract syntax, write the typing rules for these terms and extend the type checker to follow these rules.</li>
+<li>Add support for another simple type, such as characters or strings. Extend the abstract syntax, write the typing rules and extend the type checker. Also add some computation constructs that interact with these values: for characters for example, you might want to add functions like Haskell’s <a href="https://hackage.haskell.org/package/base/docs/Data-Char.html#v:ord"><code>ord :: Char -&gt; Int</code></a> and <a href="https://hackage.haskell.org/package/base/docs/Data-Char.html#v:chr"><code>chr :: Int -&gt; Char</code></a>.</li>
+<li>Write an evaluator for the STLC.</li>
+<li>Write a parser for STLC terms. You might want to take a look at <a href="https://hackage.haskell.org/package/parsec">Parsec</a>, or find an introduction to <em>parser combinators</em>.</li>
+<li>Rewrite the type checker using <a href="https://hackage.haskell.org/package/mtl">monad transformers</a>. The type checker can be written in the <code>ReaderT Context (Except TypeError)</code> monad. <a href="http://learnyouahaskell.com"><em>Learn You a Haskell for Great Good</em></a> has an <a href="http://learnyouahaskell.com/for-a-few-monads-more">introduction to monad transformers</a>.</li>
+</ol>
+<p>In the next post, I’ll describe how we can add more support for abstraction to the simply typed lambda calculus, and we’ll take a look at the <em>polymorphic lambda calculus</em>.</p>
+<section class="footnotes" role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1" role="doc-endnote"><p>Using integers as variables is actually a well-known technique. It is useful for writing an evaluator of the lambda calculus, because it is a lot easier to define substitution that way. If you want to know more, read about <a href="https://en.wikipedia.org/wiki/De_Bruijn_index"><em>De Bruijn-indices</em></a>.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn2" role="doc-endnote"><p>Instead of having support for functions with multiple parameters, we choose to write functions that return other functions. A function that adds its two integer parameters, for example, is written like <span class="math inline">\(\lambda a : \mathsf{Int}. \lambda b : \mathsf{Int}. a + b\)</span>. This is called <a href="https://en.wikipedia.org/wiki/Currying">Currying</a>.<a href="#fnref2" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+  </section>
+</article>
+
+    </main>
+
+    <footer>
+      Site proudly generated by
+      <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+    </footer>
+
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  </body>
+</html>

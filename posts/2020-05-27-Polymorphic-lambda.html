@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Polymorphic lambda calculus - Splinter Suidman</title>
+    <link rel="stylesheet" href="../css/default.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">
+        <a href="../">Splinter Suidman</a>
+      </div>
+      <nav>
+        <a href="../">Home</a>
+        <a href="../about.html">About</a>
+        <a href="../feeds.html">Feeds</a>
+      </nav>
+    </header>
+
+    <main role="main">
+      <article>
+  <h1>Polymorphic lambda calculus</h1>
+  <section class="header">
+    27 May 2020
+    
+  </section>
+  
+    <section class="series-info">
+      This post is part 3 of 4 of the series <a href="../series/Introduction%20to%20Type%20Systems.html">Introduction to Type Systems</a>.
+    </section>
+  
+  <section>
+    <p>In the previous post, we have explored the simply typed lambda calculus (STLC), an extension of the untyped lambda calculus with simple types. In this post, we’ll take a look at the <em>polymorphic lambda calculus</em>, also called <em>System F</em>, an extension of the STLC with <em>polymorphism</em>.</p>
+<details>
+<p><summary>Imports etc.</summary></p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1"></a><span class="kw">module</span> <span class="dt">Polymorphic</span> <span class="kw">where</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a></span>
+<span id="cb1-3"><a href="#cb1-3"></a><span class="kw">import</span>           <span class="dt">Control.Monad</span>   (when)</span>
+<span id="cb1-4"><a href="#cb1-4"></a><span class="kw">import</span>           <span class="dt">Data.Either</span>     (fromRight)</span>
+<span id="cb1-5"><a href="#cb1-5"></a><span class="kw">import</span>           <span class="dt">Data.List</span>       (elemIndex)</span>
+<span id="cb1-6"><a href="#cb1-6"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.Map.Strict</span> <span class="kw">as</span> <span class="dt">Map</span></span>
+<span id="cb1-7"><a href="#cb1-7"></a><span class="kw">import</span>           <span class="dt">Data.Map.Strict</span> (<span class="dt">Map</span>)</span>
+<span id="cb1-8"><a href="#cb1-8"></a><span class="kw">import</span>           <span class="dt">Data.Maybe</span>      (fromJust)</span></code></pre></div>
+</details>
+<h2 id="motivation">Motivation</h2>
+<p>We have seen in the previous post how to write the identity function on booleans: <span class="math inline">\(\lambda x : \mathsf{Bool}. x\)</span>. We have also seen the identity function on boolean-to-integer functions: <span class="math inline">\(\lambda x : \mathsf{Bool} \rightarrow \mathsf{Int}. x\)</span>. As you can see, these definitions are very similar: only the type of <span class="math inline">\(x\)</span> is different, but the rest of the term is the exactly same.</p>
+<p>This is suboptimal, because it means that we have duplication: in a large codebase, we may need the identity function on booleans, on integers, on boolean-to-boolean functions, on integer-to-boolean functions, etc. Not only is it annoying to write all those definitions, but what if we later realise we’ve made a mistake?<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a> We have to change <em>all</em> definitions, for every type!</p>
+<p>To prevent such needless labour, we want to use <em>abstraction</em>: we want to be able to write the identity function for <em>all</em> types, with only <em>one</em> definition. We will therefore extend the STLC with <a href="https://en.wikipedia.org/wiki/Parametric_polymorphism"><em>(parametric) polymorphism</em></a>. The result is called the <em>polymorphic lambda calculus</em> or <a href="https://en.wikipedia.org/wiki/System_F"><em>System F</em></a>.</p>
+<h2 id="syntax">Syntax</h2>
+<p>To incorporate polymorphism in the STLC, we add two new sorts of types:</p>
+<ol type="1">
+<li><p><em>Type variables</em>. These are just like ‘normal’, term-level variables, but instead of ranging over values, they range over types. We’ll write them with capital letters.</p></li>
+<li><p><em>Polymorphic types</em>. These are written in formal syntax as <span class="math inline">\(\forall X. \tau\)</span>, where <span class="math inline">\(X\)</span> is a type variable, and <span class="math inline">\(\tau\)</span> a type. (<span class="math inline">\(\forall\)</span> is the mathematical symbol with the meaning ‘for all’.) In more Haskell-like syntax, we may write <code>forall X. τ</code>.</p>
+<p>An example of a polymorphic type is <span class="math inline">\(\mathsf{id} : \forall X. X \rightarrow X\)</span>, which is the type of a function that accepts a value of any type, and returns that value. (All terms with that type turn out to be equivalent to the identity function.)</p></li>
+</ol>
+<p>The new syntax of types is thus:</p>
+<p><span class="math display">\[
+\begin{align*}
+  \tau ::=\ &amp; X &amp; \text{(type variable)} \\
+      \mid\ &amp; \forall X. \tau &amp; \text{(polymorphic type)} \\
+      \mid\ &amp; \tau \rightarrow \tau' &amp; \text{(function type)} \\
+      \mid\ &amp; \mathsf{Bool} &amp; \text{(boolean type)} \\
+      \mid\ &amp; \mathsf{Int} &amp; \text{(integer type)}
+\end{align*}
+\]</span></p>
+<p>The new AST type for types looks like this:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1"></a><span class="kw">data</span> <span class="dt">Type</span></span>
+<span id="cb2-2"><a href="#cb2-2"></a>  <span class="ot">=</span> <span class="dt">TyVar</span> <span class="dt">String</span></span>
+<span id="cb2-3"><a href="#cb2-3"></a>    <span class="co">-- ^ Type variable</span></span>
+<span id="cb2-4"><a href="#cb2-4"></a>  <span class="op">|</span> <span class="dt">TyForall</span> <span class="dt">String</span> <span class="dt">Type</span></span>
+<span id="cb2-5"><a href="#cb2-5"></a>    <span class="co">-- ^ Polymorphic type</span></span>
+<span id="cb2-6"><a href="#cb2-6"></a>  <span class="op">|</span> <span class="dt">TyFun</span> <span class="dt">Type</span> <span class="dt">Type</span></span>
+<span id="cb2-7"><a href="#cb2-7"></a>    <span class="co">-- ^ Function type</span></span>
+<span id="cb2-8"><a href="#cb2-8"></a>  <span class="op">|</span> <span class="dt">TyBool</span></span>
+<span id="cb2-9"><a href="#cb2-9"></a>    <span class="co">-- ^ Boolean type</span></span>
+<span id="cb2-10"><a href="#cb2-10"></a>  <span class="op">|</span> <span class="dt">TyInt</span></span>
+<span id="cb2-11"><a href="#cb2-11"></a>    <span class="co">-- ^ Integer type</span></span>
+<span id="cb2-12"><a href="#cb2-12"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+<p>Having updated the syntax of types, we also need to update the syntax of terms: we need terms that introduce and interact with polymorphic types. These are the terms we add:</p>
+<ol type="1">
+<li><p><em>Type abstractions</em>. Type abstractions are just like normal abstractions, but instead of introducing a variable that ranges over values, it introduces a type variable that ranges over types.</p>
+<p>We write type abstractions with an uppercase lambda, to distinguish them from normal abstractions: <span class="math inline">\(\Lambda X. t\)</span> for a type variable <span class="math inline">\(X\)</span> and a term <span class="math inline">\(t\)</span>. In Haskell-like syntax, we write: <code>/\X. t</code>.</p>
+<p>Using type abstractions, we can write the generic identity function for which we’ve seen the type above: <span class="math inline">\(\mathsf{id} = \Lambda X. \lambda x : X. x\)</span>. In the right-hand side of the type abstraction, after the period, we now can refer to <span class="math inline">\(X\)</span>, but only in types. So we can create an abstraction that accepts a parameter of type <span class="math inline">\(X\)</span>.</p></li>
+<li><p><em>Type applications</em>. Type applications are used to <em>instantiate</em> a term with a specific type. If we want to use the identity function on an integer, we need to indicate that the type variable <span class="math inline">\(X\)</span> in the definition of <span class="math inline">\(\mathsf{id}\)</span> should be replaced by <span class="math inline">\(\mathsf{Int}\)</span>.</p>
+<p>In formal syntax, type applications are generally written the same as normal applications: <span class="math inline">\(\mathsf{id}\ \mathsf{Int}\)</span>. But to be more explicit, we can use the Haskell syntax<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a>: <code>id @Int</code>.</p></li>
+</ol>
+<p>We add the following to the syntax of terms:</p>
+<p><span class="math display">\[
+\begin{align*}
+  t ::=\ &amp; \ldots \\
+   \mid\ &amp; \Lambda X. t &amp; \text{(type abstraction)} \\
+   \mid\ &amp; t\ \tau &amp; \text{(type application)}
+\end{align*}
+\]</span></p>
+<p>The updated AST for terms:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb3-1"><a href="#cb3-1"></a><span class="kw">data</span> <span class="dt">Term</span></span>
+<span id="cb3-2"><a href="#cb3-2"></a>  <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="dt">String</span> <span class="dt">Term</span></span>
+<span id="cb3-3"><a href="#cb3-3"></a>    <span class="co">-- ^ Type abstraction</span></span>
+<span id="cb3-4"><a href="#cb3-4"></a>  <span class="op">|</span> <span class="dt">TmTyApp</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb3-5"><a href="#cb3-5"></a>    <span class="co">-- ^ Type application</span></span></code></pre></div>
+<p>The rest of the AST is exactly the same as in the STLC, but you can still see it by clicking:</p>
+<details>
+<p><summary>The rest of the AST definition</summary></p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb4-1"><a href="#cb4-1"></a>  <span class="op">|</span> <span class="dt">TmTrue</span></span>
+<span id="cb4-2"><a href="#cb4-2"></a>    <span class="co">-- ^ True value</span></span>
+<span id="cb4-3"><a href="#cb4-3"></a>  <span class="op">|</span> <span class="dt">TmFalse</span></span>
+<span id="cb4-4"><a href="#cb4-4"></a>    <span class="co">-- ^ False value</span></span>
+<span id="cb4-5"><a href="#cb4-5"></a>  <span class="op">|</span> <span class="dt">TmInt</span> <span class="dt">Integer</span></span>
+<span id="cb4-6"><a href="#cb4-6"></a>    <span class="co">-- ^ Integer value</span></span>
+<span id="cb4-7"><a href="#cb4-7"></a>  <span class="op">|</span> <span class="dt">TmVar</span> <span class="dt">String</span></span>
+<span id="cb4-8"><a href="#cb4-8"></a>    <span class="co">-- ^ Variable</span></span>
+<span id="cb4-9"><a href="#cb4-9"></a>  <span class="op">|</span> <span class="dt">TmAbs</span> <span class="dt">String</span> <span class="dt">Type</span> <span class="dt">Term</span></span>
+<span id="cb4-10"><a href="#cb4-10"></a>    <span class="co">-- ^ Lambda abstraction</span></span>
+<span id="cb4-11"><a href="#cb4-11"></a>  <span class="op">|</span> <span class="dt">TmApp</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb4-12"><a href="#cb4-12"></a>    <span class="co">-- ^ Application</span></span>
+<span id="cb4-13"><a href="#cb4-13"></a>  <span class="op">|</span> <span class="dt">TmAdd</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb4-14"><a href="#cb4-14"></a>    <span class="co">-- ^ Addition</span></span>
+<span id="cb4-15"><a href="#cb4-15"></a>  <span class="op">|</span> <span class="dt">TmIf</span> <span class="dt">Term</span> <span class="dt">Term</span> <span class="dt">Term</span></span>
+<span id="cb4-16"><a href="#cb4-16"></a>    <span class="co">-- ^ If-then-else conditional</span></span>
+<span id="cb4-17"><a href="#cb4-17"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+</details>
+<h3 id="examples">Examples</h3>
+<p>Let’s look at some examples.<a href="#fn3" class="footnote-ref" id="fnref3" role="doc-noteref"><sup>3</sup></a> We’ve already seen the polymorphic identity function:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb5-1"><a href="#cb5-1"></a>tmId <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>) (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>))</span></code></pre></div>
+<p>And its type:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb6-1"><a href="#cb6-1"></a>tyId <span class="ot">=</span> <span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>))</span></code></pre></div>
+<p>We can also write the <span class="math inline">\(\mathsf{const}\)</span> function, which returns its first parameter and ignores its second: <span class="math inline">\(\mathsf{const} = \Lambda A. \Lambda B. \lambda a : A. \lambda b : B. a\)</span>. In the Haskell AST:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb7-1"><a href="#cb7-1"></a>tmConst <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;a&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>) (<span class="dt">TmAbs</span> <span class="st">&quot;b&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TmVar</span> <span class="st">&quot;a&quot;</span>))))</span></code></pre></div>
+<p>And its type, <span class="math inline">\(\mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow A\)</span>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb8-1"><a href="#cb8-1"></a>tyConst <span class="ot">=</span> <span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>))))</span></code></pre></div>
+<p>And we can try to use <span class="math inline">\(\mathsf{const}\)</span> to return a value. The term <span class="math inline">\(\mathsf{const}\ \mathsf{Bool}\ \mathsf{Int}\ \mathsf{False}\ 5\)</span> should evaluate to <span class="math inline">\(\mathsf{False}\)</span>, so its type should be <span class="math inline">\(\mathsf{Bool}\)</span>:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb9-1"><a href="#cb9-1"></a>tmConstFalse5 <span class="ot">=</span> <span class="dt">TmApp</span> (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> tmConst <span class="dt">TyBool</span>) <span class="dt">TyInt</span>) <span class="dt">TmFalse</span>) (<span class="dt">TmInt</span> <span class="dv">5</span>)</span>
+<span id="cb9-2"><a href="#cb9-2"></a></span>
+<span id="cb9-3"><a href="#cb9-3"></a>tyConstFalse5 <span class="ot">=</span> <span class="dt">TyBool</span></span></code></pre></div>
+<p>Now we understand the syntax, we can move on to type checking.</p>
+<h2 id="type-checking">Type checking</h2>
+<p>Describing the type checking of the polymorphic lambda calculus isn’t actually that difficult. We will only add two typing rules: one for type abstractions and one for type applications. The rest of the rules will be exactly the same as those of the STLC.</p>
+<p>The first rule we add is the one for type abstractions:</p>
+<p><span class="math display">\[
+  \text{T-TyAbs: } \frac{
+    \Gamma \vdash t : \tau
+  }{
+    \Gamma \vdash \Lambda X. t : \forall X. \tau
+  }
+\]</span></p>
+<p>This rule is quite simple: if <span class="math inline">\(t\)</span> has type <span class="math inline">\(\tau\)</span>, then <span class="math inline">\(\Lambda X. t\)</span> has type <span class="math inline">\(\forall X. \tau\)</span>. This is the introduction rule for polymorphic types, since it is the only typing rule that ‘produces’ a <span class="math inline">\(\forall\)</span>.</p>
+<p>The rule for type applications is the elimination rule for polymorphic types: it ‘removes’ a <span class="math inline">\(\forall\)</span>. The rule is:</p>
+<p><span class="math display">\[
+  \text{T-TyApp: } \frac{
+    \Gamma \vdash t : \forall X. \tau
+  }{
+    \Gamma \vdash t\ \tau' : \tau[X := \tau']
+  }
+\]</span></p>
+<p>This rule says: if <span class="math inline">\(t\)</span> has type <span class="math inline">\(\forall X. \tau\)</span>, then <span class="math inline">\(t\ \tau'\)</span> (<span class="math inline">\(t\)</span> applied to type <span class="math inline">\(\tau'\)</span>) has type <span class="math inline">\(\tau[X := \tau']\)</span>. This type is the result of a <em>substitution</em>; <span class="math inline">\(\tau[X := \tau']\)</span> means: substitute every free type variable <span class="math inline">\(X\)</span> in <span class="math inline">\(\tau\)</span> with <span class="math inline">\(\tau'\)</span>. But, as we will see, that’s easier said than done…</p>
+<p>First, let’s look at some examples of substitution:</p>
+<p><span class="math display">\[
+\begin{align*}
+  X[X := \mathsf{Int}] &amp; \rightarrow \mathsf{Int} \\
+  (X \rightarrow X)[X := \mathsf{Bool}] &amp; \rightarrow (\mathsf{Bool} \rightarrow \mathsf{Bool}) \\
+  (X \rightarrow Y)[X := \mathsf{Int} \rightarrow \mathsf{Bool}] &amp; \rightarrow ((\mathsf{Int} \rightarrow \mathsf{Bool}) \rightarrow Y) \\
+  (X \rightarrow (\forall X. X))[X := Y] &amp; \rightarrow (Y \rightarrow (\forall X. X))
+\end{align*}
+\]</span></p>
+<h3 id="naïve-substitution">Naïve substitution</h3>
+<p>We’ll try to write a function that performs a substitution. We write <code>subst x ty' ty</code> for <span class="math inline">\(\mathit{ty}[x := \mathit{ty'}]\)</span>:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb10-1"><a href="#cb10-1"></a><span class="ot">subst ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="ot">-&gt;</span> <span class="dt">Type</span></span></code></pre></div>
+<p>Defining <code>subst</code> for the simple types is easy, because they do not contain any free variables.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb11-1"><a href="#cb11-1"></a>subst x ty' <span class="dt">TyBool</span> <span class="ot">=</span> <span class="dt">TyBool</span></span>
+<span id="cb11-2"><a href="#cb11-2"></a>subst x ty' <span class="dt">TyInt</span>  <span class="ot">=</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>Applying a substitution to a function type is also not that difficult: we’ll just apply the substitution to the source and to the target type:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb12-1"><a href="#cb12-1"></a>subst x ty' (<span class="dt">TyFun</span> ty1 ty2) <span class="ot">=</span> <span class="dt">TyFun</span> (subst x ty' ty1) (subst x ty' ty2)</span></code></pre></div>
+<p>When we come across a type variable <code>y</code>, we should replace it with <code>ty'</code> if <code>x</code> is equal to <code>y</code>. Otherwise, we keep <code>y</code>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb13-1"><a href="#cb13-1"></a>subst x ty' (<span class="dt">TyVar</span> y)</span>
+<span id="cb13-2"><a href="#cb13-2"></a>  <span class="op">|</span> x <span class="op">==</span> y    <span class="ot">=</span> ty'</span>
+<span id="cb13-3"><a href="#cb13-3"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="dt">TyVar</span> y</span></code></pre></div>
+<p>When we apply the substitution to a polymorphic type, we need to be careful: we only want to apply the substitution to <em>free</em> variables, and the <span class="math inline">\(\forall\)</span> binds the variables next to it. So only if the type abstraction binds a variable with a name different from <code>x</code>, we should apply the substitution to the right-hand side of the polymorphic type:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb14-1"><a href="#cb14-1"></a>subst x ty' (<span class="dt">TyForall</span> y ty)</span>
+<span id="cb14-2"><a href="#cb14-2"></a>  <span class="op">|</span> x <span class="op">==</span> y    <span class="ot">=</span> <span class="dt">TyForall</span> y ty</span>
+<span id="cb14-3"><a href="#cb14-3"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="dt">TyForall</span> y (subst x ty' ty)</span></code></pre></div>
+<p>Let’s check some examples. Applying a substitution on simple types should do nothing:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb15-1"><a href="#cb15-1"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) <span class="dt">TyInt</span></span>
+<span id="cb15-2"><a href="#cb15-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyInt</span></span>
+<span id="cb15-3"><a href="#cb15-3"></a></span>
+<span id="cb15-4"><a href="#cb15-4"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) <span class="dt">TyBool</span></span>
+<span id="cb15-5"><a href="#cb15-5"></a>  <span class="ot">=&gt;</span> <span class="dt">TyBool</span></span></code></pre></div>
+<p>If we apply this substitution to the type variable <code>"X"</code>, it should be replaced:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb16-1"><a href="#cb16-1"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>)</span>
+<span id="cb16-2"><a href="#cb16-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>But if we apply it to <code>"Y"</code>, it should not be replaced:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb17-1"><a href="#cb17-1"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>) (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>)</span>
+<span id="cb17-2"><a href="#cb17-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span></span></code></pre></div>
+<p>The substitution should only happen on polymorphic types when <code>"X"</code> is not bound:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb18-1"><a href="#cb18-1"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>)</span>
+<span id="cb18-2"><a href="#cb18-2"></a>  (<span class="dt">TyForall</span> <span class="st">&quot;Y&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>)))</span>
+<span id="cb18-3"><a href="#cb18-3"></a>    <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;Y&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>) (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>))</span>
+<span id="cb18-4"><a href="#cb18-4"></a></span>
+<span id="cb18-5"><a href="#cb18-5"></a>subst <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> <span class="dt">TyBool</span> <span class="dt">TyInt</span>)</span>
+<span id="cb18-6"><a href="#cb18-6"></a>  (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>)))</span>
+<span id="cb18-7"><a href="#cb18-7"></a>    <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>))</span></code></pre></div>
+<p>Looks good, right?</p>
+<p>Implementing the type checker for the added terms is now very easy:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb19-1"><a href="#cb19-1"></a>typeOf ctx (<span class="dt">TmTyAbs</span> x t) <span class="ot">=</span> <span class="dt">TyForall</span> x <span class="op">&lt;$&gt;</span> typeOf ctx t</span>
+<span id="cb19-2"><a href="#cb19-2"></a></span>
+<span id="cb19-3"><a href="#cb19-3"></a>typeOf ctx (<span class="dt">TmTyApp</span> t1 ty2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb19-4"><a href="#cb19-4"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb19-5"><a href="#cb19-5"></a>  <span class="kw">case</span> ty1 <span class="kw">of</span></span>
+<span id="cb19-6"><a href="#cb19-6"></a>    <span class="dt">TyForall</span> x ty12 <span class="ot">-&gt;</span> <span class="dt">Right</span> <span class="op">$</span> subst x ty2 ty12</span>
+<span id="cb19-7"><a href="#cb19-7"></a>    _ <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">TypeApplicationNonPolymorphic</span> t1 ty1</span></code></pre></div>
+<p>The rest of the type checker is exactly the same as the type checker for the STLC, which we’ve developed in the previous post. You can still see it here:</p>
+<details>
+<p><summary>The rest of <code>typeOf</code></summary></p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb20-1"><a href="#cb20-1"></a>typeOf ctx <span class="dt">TmTrue</span>    <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb20-2"><a href="#cb20-2"></a>typeOf ctx <span class="dt">TmFalse</span>   <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb20-3"><a href="#cb20-3"></a>typeOf ctx (<span class="dt">TmInt</span> n) <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyInt</span></span>
+<span id="cb20-4"><a href="#cb20-4"></a>typeOf ctx (<span class="dt">TmVar</span> x) <span class="ot">=</span></span>
+<span id="cb20-5"><a href="#cb20-5"></a>  <span class="kw">case</span> Map.lookup x ctx <span class="kw">of</span></span>
+<span id="cb20-6"><a href="#cb20-6"></a>    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">UnboundVariable</span> x</span>
+<span id="cb20-7"><a href="#cb20-7"></a>    <span class="dt">Just</span> ty <span class="ot">-&gt;</span> <span class="dt">Right</span> ty</span>
+<span id="cb20-8"><a href="#cb20-8"></a>typeOf ctx (<span class="dt">TmAbs</span> x ty t) <span class="ot">=</span></span>
+<span id="cb20-9"><a href="#cb20-9"></a>  <span class="kw">let</span> ctx' <span class="ot">=</span> Map.insert x ty ctx</span>
+<span id="cb20-10"><a href="#cb20-10"></a>      ty'  <span class="ot">=</span> typeOf ctx' t</span>
+<span id="cb20-11"><a href="#cb20-11"></a>   <span class="kw">in</span> <span class="dt">TyFun</span> ty <span class="op">&lt;$&gt;</span> ty'</span>
+<span id="cb20-12"><a href="#cb20-12"></a>typeOf ctx (<span class="dt">TmApp</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb20-13"><a href="#cb20-13"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb20-14"><a href="#cb20-14"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb20-15"><a href="#cb20-15"></a>  <span class="kw">case</span> ty1 <span class="kw">of</span></span>
+<span id="cb20-16"><a href="#cb20-16"></a>    <span class="dt">TyFun</span> ty11 ty12 <span class="ot">-&gt;</span></span>
+<span id="cb20-17"><a href="#cb20-17"></a>      <span class="kw">if</span> ty2 <span class="op">==</span> ty11</span>
+<span id="cb20-18"><a href="#cb20-18"></a>        <span class="kw">then</span> <span class="dt">Right</span> ty12</span>
+<span id="cb20-19"><a href="#cb20-19"></a>        <span class="kw">else</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationWrongArgumentType</span> t1 ty1 t2 ty2</span>
+<span id="cb20-20"><a href="#cb20-20"></a>    _ <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationNotFunction</span> t1 ty1</span>
+<span id="cb20-21"><a href="#cb20-21"></a>typeOf ctx (<span class="dt">TmAdd</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb20-22"><a href="#cb20-22"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb20-23"><a href="#cb20-23"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb20-24"><a href="#cb20-24"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t1 ty1</span>
+<span id="cb20-25"><a href="#cb20-25"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb20-26"><a href="#cb20-26"></a>  when (ty2 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb20-27"><a href="#cb20-27"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t2 ty2</span>
+<span id="cb20-28"><a href="#cb20-28"></a>  <span class="dt">Right</span> <span class="dt">TyInt</span></span>
+<span id="cb20-29"><a href="#cb20-29"></a>typeOf ctx (<span class="dt">TmIf</span> t1 t2 t3) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb20-30"><a href="#cb20-30"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb20-31"><a href="#cb20-31"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyBool</span>) <span class="op">$</span></span>
+<span id="cb20-32"><a href="#cb20-32"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">NonBooleanCondition</span> t1 ty1</span>
+<span id="cb20-33"><a href="#cb20-33"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb20-34"><a href="#cb20-34"></a>  ty3 <span class="ot">&lt;-</span> typeOf ctx t3</span>
+<span id="cb20-35"><a href="#cb20-35"></a>  when (ty2 <span class="op">/=</span> ty3) <span class="op">$</span></span>
+<span id="cb20-36"><a href="#cb20-36"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ArmsOfDifferentType</span> t2 ty2 t3 ty3</span>
+<span id="cb20-37"><a href="#cb20-37"></a>  <span class="dt">Right</span> ty2</span></code></pre></div>
+<p>And the other necessary definitions:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb21-1"><a href="#cb21-1"></a><span class="ot">typeOf ::</span> <span class="dt">Context</span> <span class="ot">-&gt;</span> <span class="dt">Term</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> <span class="dt">TypeError</span> <span class="dt">Type</span></span>
+<span id="cb21-2"><a href="#cb21-2"></a></span>
+<span id="cb21-3"><a href="#cb21-3"></a><span class="kw">data</span> <span class="dt">TypeError</span></span>
+<span id="cb21-4"><a href="#cb21-4"></a>  <span class="ot">=</span> <span class="dt">UnboundVariable</span> <span class="dt">String</span></span>
+<span id="cb21-5"><a href="#cb21-5"></a>  <span class="op">|</span> <span class="dt">AdditionNonInteger</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-6"><a href="#cb21-6"></a>  <span class="op">|</span> <span class="dt">NonBooleanCondition</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-7"><a href="#cb21-7"></a>  <span class="op">|</span> <span class="dt">ArmsOfDifferentType</span> <span class="dt">Term</span> <span class="dt">Type</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-8"><a href="#cb21-8"></a>  <span class="op">|</span> <span class="dt">ApplicationWrongArgumentType</span> <span class="dt">Term</span> <span class="dt">Type</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-9"><a href="#cb21-9"></a>  <span class="op">|</span> <span class="dt">ApplicationNotFunction</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-10"><a href="#cb21-10"></a>  <span class="op">|</span> <span class="dt">TypeApplicationNonPolymorphic</span> <span class="dt">Term</span> <span class="dt">Type</span></span>
+<span id="cb21-11"><a href="#cb21-11"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span>
+<span id="cb21-12"><a href="#cb21-12"></a></span>
+<span id="cb21-13"><a href="#cb21-13"></a><span class="kw">type</span> <span class="dt">Context</span> <span class="ot">=</span> <span class="dt">Map</span> <span class="dt">String</span> <span class="dt">Type</span></span></code></pre></div>
+</details>
+<p>We can try some examples:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb22-1"><a href="#cb22-1"></a>typeOf Map.empty tmId</span>
+<span id="cb22-2"><a href="#cb22-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>)))</span>
+<span id="cb22-3"><a href="#cb22-3"></a></span>
+<span id="cb22-4"><a href="#cb22-4"></a>typeOf Map.empty tmId <span class="op">==</span> <span class="dt">Right</span> tyId</span>
+<span id="cb22-5"><a href="#cb22-5"></a> <span class="ot">=&gt;</span> <span class="dt">True</span></span>
+<span id="cb22-6"><a href="#cb22-6"></a></span>
+<span id="cb22-7"><a href="#cb22-7"></a>typeOf Map.empty tmConst</span>
+<span id="cb22-8"><a href="#cb22-8"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span></span>
+<span id="cb22-9"><a href="#cb22-9"></a>       (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span></span>
+<span id="cb22-10"><a href="#cb22-10"></a>        (<span class="dt">TyFun</span></span>
+<span id="cb22-11"><a href="#cb22-11"></a>         (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)</span>
+<span id="cb22-12"><a href="#cb22-12"></a>         (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)))))</span>
+<span id="cb22-13"><a href="#cb22-13"></a></span>
+<span id="cb22-14"><a href="#cb22-14"></a>typeOf Map.empty tmConst <span class="op">==</span> <span class="dt">Right</span> tyConst</span>
+<span id="cb22-15"><a href="#cb22-15"></a>  <span class="ot">=&gt;</span> <span class="dt">True</span></span>
+<span id="cb22-16"><a href="#cb22-16"></a></span>
+<span id="cb22-17"><a href="#cb22-17"></a>typeOf Map.empty tmConstFalse5</span>
+<span id="cb22-18"><a href="#cb22-18"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb22-19"><a href="#cb22-19"></a></span>
+<span id="cb22-20"><a href="#cb22-20"></a>typeOf Map.empty tmConstFalse5 <span class="op">==</span> <span class="dt">Right</span> tyConstFalse5</span>
+<span id="cb22-21"><a href="#cb22-21"></a>  <span class="ot">=&gt;</span> <span class="dt">True</span></span></code></pre></div>
+<p>Looks pretty good, doesn’t it? But there’s a sneaky problem, and it has to do with our definition of <code>subst</code>.<a href="#fn4" class="footnote-ref" id="fnref4" role="doc-noteref"><sup>4</sup></a></p>
+<p>Let’s say we want to write a function that flips the type arguments of <span class="math inline">\(\mathsf{const}\)</span>, so <span class="math inline">\(\Lambda A. \Lambda B. \lambda a : A. \lambda b : B. a\)</span> should become <span class="math inline">\(\Lambda A. \Lambda B. \lambda a : B. \lambda b : A. a\)</span>. And we’re going to write it using the definition of <span class="math inline">\(\mathsf{const}\)</span> we’ve already written. Writing this function is quite easy: <span class="math inline">\(\mathsf{constFlip} = \Lambda A. \Lambda B. \mathsf{const}\ B\ A\)</span>.</p>
+<p>The type of <span class="math inline">\(\mathsf{const}\)</span> is <span class="math inline">\(\forall A. \forall B. A \rightarrow B \rightarrow A\)</span>, so what should the type of <span class="math inline">\(\mathsf{constFlip}\)</span> be? Well, that should be <span class="math inline">\(\forall A. \forall B. B \rightarrow A \rightarrow B\)</span>, right? Let’s ask our type checker:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb23-1"><a href="#cb23-1"></a>tmConstFlip <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> tmConst (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)) (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)))</span></code></pre></div>
+<div class="sourceCode" id="cb24"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb24-1"><a href="#cb24-1"></a>typeOf Map.empty tmConstFlip</span>
+<span id="cb24-2"><a href="#cb24-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)))))</span></code></pre></div>
+<p>Let’s make that a bit nicer to read: our type checker says that <span class="math inline">\(\mathsf{constFlip}\)</span> has type <span class="math inline">\(\forall A. \forall B. A \rightarrow A \rightarrow A\)</span>.</p>
+<p>What‽ That’s not right! We have lost all our <span class="math inline">\(B\)</span>’s!</p>
+<p>Indeed, we’ve made a mistake, namely in our definition of <code>subst</code>. Let’s look at the type checking process of <span class="math inline">\(\mathsf{constFlip}\)</span>. The first step is:</p>
+<p><span class="math display">\[
+  \text{T-TyApp: } \frac{
+    \Gamma \vdash \mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow B
+  }{
+    \Gamma \vdash \mathsf{const}\ B : (\forall B. A \rightarrow B \rightarrow A)[A := B]
+  }
+\]</span></p>
+<p>Applying the substitution with our definition of <code>subst</code> gives: <span class="math inline">\(\forall B. B \rightarrow B \rightarrow B\)</span>. Note that the <span class="math inline">\(B\)</span>’s that were first <span class="math inline">\(A\)</span>’s are now <em>captured</em> by the <span class="math inline">\(\forall B\)</span>, which means that they now refer to something they shouldn’t refer to!</p>
+<p>The next step:</p>
+<p><span class="math display">\[
+  \text{T-TyApp: } \frac{
+    \Gamma \vdash \mathsf{const}\ B : \forall B. B \rightarrow B \rightarrow B
+  }{
+    \Gamma \vdash \mathsf{const}\ B\ A : (B \rightarrow B \rightarrow B)[B := A]
+  }
+\]</span></p>
+<p>Applying this substitution gives: <span class="math inline">\(A \rightarrow A \rightarrow A\)</span>. In the following steps, the quantifiers are added back, so our end result is: <span class="math inline">\(\forall B. \forall A. A \rightarrow A \rightarrow A\)</span>.</p>
+<p>The problem we run into here, is that we should rename some type variables. We can, for example, write <span class="math inline">\(\mathsf{const}\)</span> as <span class="math inline">\(\Lambda C. \Lambda D. \lambda a : C. \lambda b : D. a\)</span>. The type is then <span class="math inline">\(\forall C. \forall D. C \rightarrow D \rightarrow C\)</span>. Now, if we type check <span class="math inline">\(\mathsf{constFlip}\)</span>, we get the right result:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb25-1"><a href="#cb25-1"></a>tmConst' <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;C&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;D&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;a&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;C&quot;</span>) (<span class="dt">TmAbs</span> <span class="st">&quot;b&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;D&quot;</span>) (<span class="dt">TmVar</span> <span class="st">&quot;a&quot;</span>))))</span>
+<span id="cb25-2"><a href="#cb25-2"></a></span>
+<span id="cb25-3"><a href="#cb25-3"></a>tmConstFlip' <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> tmConst' (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)) (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)))</span></code></pre></div>
+<div class="sourceCode" id="cb26"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb26-1"><a href="#cb26-1"></a>typeOf Map.empty tmConstFlip'</span>
+<span id="cb26-2"><a href="#cb26-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)))))</span></code></pre></div>
+<p>That is <span class="math inline">\(\forall A. \forall B. B \rightarrow A \rightarrow B\)</span>, exactly what we wanted.</p>
+<p>To solve this problem, we should let our <code>subst</code> function rename some type variables to <em>fresh</em> (i.e., not already used) variables. This isn’t <em>very</em> hard to implement, but there is a nicer solution that is easier to reason about.</p>
+<h2 id="de-bruijn-indices">De Bruijn-indices</h2>
+<p>We will use <a href="https://en.wikipedia.org/wiki/De_Bruijn_index"><em>De Bruijn-indices</em></a>. These indices will replace our type variable names, for which we used strings. Instead, we’ll use integers. The integer <span class="math inline">\(n\)</span> will refer to the <span class="math inline">\(n\)</span>th binding <span class="math inline">\(\forall\)</span>, counting outwards from the variable and starting from zero<a href="#fn5" class="footnote-ref" id="fnref5" role="doc-noteref"><sup>5</sup></a>. So the type for <span class="math inline">\(\mathsf{const}\)</span>, which is <span class="math inline">\(\forall A. \forall B. A \rightarrow B \rightarrow A\)</span>, will be written as <span class="math inline">\(\forall. \forall. 1 \rightarrow 0 \rightarrow 1\)</span>. (We’ll actually keep the bound names in the AST: <span class="math inline">\(\forall A. \forall B. 1 \rightarrow 0 \rightarrow 1\)</span>, but that is not necessary.)</p>
+<p>To apply these changes to the Haskell AST, we won’t just change <code>TyVar String</code> into <code>TyVar Int</code>, but we’ll write:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb27-1"><a href="#cb27-1"></a><span class="kw">data</span> <span class="dt">Type</span> x</span>
+<span id="cb27-2"><a href="#cb27-2"></a>  <span class="ot">=</span> <span class="dt">TyVar</span> x</span>
+<span id="cb27-3"><a href="#cb27-3"></a>    <span class="co">-- ^ Type variable</span></span>
+<span id="cb27-4"><a href="#cb27-4"></a>  <span class="op">|</span> <span class="dt">TyForall</span> <span class="dt">String</span> (<span class="dt">Type</span> x)</span>
+<span id="cb27-5"><a href="#cb27-5"></a>    <span class="co">-- ^ Polymorphic type</span></span>
+<span id="cb27-6"><a href="#cb27-6"></a>  <span class="op">|</span> <span class="dt">TyFun</span> (<span class="dt">Type</span> x) (<span class="dt">Type</span> x)</span>
+<span id="cb27-7"><a href="#cb27-7"></a>    <span class="co">-- ^ Function type</span></span>
+<span id="cb27-8"><a href="#cb27-8"></a>  <span class="op">|</span> <span class="dt">TyBool</span></span>
+<span id="cb27-9"><a href="#cb27-9"></a>    <span class="co">-- ^ Boolean type</span></span>
+<span id="cb27-10"><a href="#cb27-10"></a>  <span class="op">|</span> <span class="dt">TyInt</span></span>
+<span id="cb27-11"><a href="#cb27-11"></a>    <span class="co">-- ^ Integer type</span></span>
+<span id="cb27-12"><a href="#cb27-12"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+<p>This allows us to construct the ordinary types as well as the types with De Bruijn-indices. We choose to do this because it makes writing a parser significantly easier: the parser can return a <code>Type String</code>, and we can later turn this into a <code>Type Int</code>. The <code>deBruijn</code> function does just that:</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb28-1"><a href="#cb28-1"></a><span class="ot">deBruijn ::</span> [<span class="dt">String</span>] <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> <span class="dt">String</span> (<span class="dt">Type</span> <span class="dt">Int</span>)</span>
+<span id="cb28-2"><a href="#cb28-2"></a>deBruijn ctx (<span class="dt">TyVar</span> x) <span class="ot">=</span> <span class="kw">case</span> elemIndex x ctx <span class="kw">of</span></span>
+<span id="cb28-3"><a href="#cb28-3"></a>    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">Left</span> x</span>
+<span id="cb28-4"><a href="#cb28-4"></a>    <span class="dt">Just</span> i  <span class="ot">-&gt;</span> <span class="dt">Right</span> (<span class="dt">TyVar</span> i)</span>
+<span id="cb28-5"><a href="#cb28-5"></a>deBruijn ctx (<span class="dt">TyForall</span> x ty) <span class="ot">=</span> <span class="dt">TyForall</span> x <span class="op">&lt;$&gt;</span> deBruijn (x <span class="op">:</span> ctx) ty </span>
+<span id="cb28-6"><a href="#cb28-6"></a>deBruijn ctx (<span class="dt">TyFun</span> ty1 ty2) <span class="ot">=</span> <span class="dt">TyFun</span> <span class="op">&lt;$&gt;</span> deBruijn ctx ty1 <span class="op">&lt;*&gt;</span> deBruijn ctx ty2</span>
+<span id="cb28-7"><a href="#cb28-7"></a>deBruijn ctx <span class="dt">TyBool</span>          <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb28-8"><a href="#cb28-8"></a>deBruijn ctx <span class="dt">TyInt</span>           <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>The <code>deBruijn</code> function turns an ordinary type into a type with De Bruijn-indices. It walks the abstract syntax tree recursively. When it comes across a <span class="math inline">\(\forall\)</span>, it adds the bound type variable to the context, which is a list of <code>String</code>s here. When it sees a variable, it tries to find it in the context, and if it is found, it is replaced by the index of the variable in the context. If the variable is not found in the context, we return <code>Left x</code>, to indicate that the function failed because <code>x</code> was unbound.</p>
+<p>We can also restore the names (because we haven’t removed the names that are bound by the <span class="math inline">\(\forall\)</span>’s)<a href="#fn6" class="footnote-ref" id="fnref6" role="doc-noteref"><sup>6</sup></a>:</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb29-1"><a href="#cb29-1"></a><span class="ot">restore ::</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> (<span class="dt">Type</span> <span class="dt">String</span>)</span>
+<span id="cb29-2"><a href="#cb29-2"></a>restore <span class="ot">=</span> go []</span>
+<span id="cb29-3"><a href="#cb29-3"></a> <span class="kw">where</span></span>
+<span id="cb29-4"><a href="#cb29-4"></a>  go ctx (<span class="dt">TyVar</span> i)       <span class="ot">=</span> <span class="dt">TyVar</span> <span class="op">&lt;$&gt;</span> nth i ctx</span>
+<span id="cb29-5"><a href="#cb29-5"></a>  go ctx (<span class="dt">TyForall</span> x ty) <span class="ot">=</span> <span class="dt">TyForall</span> x <span class="op">&lt;$&gt;</span> go (x <span class="op">:</span> ctx) ty</span>
+<span id="cb29-6"><a href="#cb29-6"></a>  go ctx (<span class="dt">TyFun</span> ty1 ty2) <span class="ot">=</span> <span class="dt">TyFun</span> <span class="op">&lt;$&gt;</span> go ctx ty1 <span class="op">&lt;*&gt;</span> go ctx ty2</span>
+<span id="cb29-7"><a href="#cb29-7"></a>  go ctx <span class="dt">TyBool</span>          <span class="ot">=</span> <span class="dt">Just</span> <span class="dt">TyBool</span></span>
+<span id="cb29-8"><a href="#cb29-8"></a>  go ctx <span class="dt">TyInt</span>           <span class="ot">=</span> <span class="dt">Just</span> <span class="dt">TyInt</span></span>
+<span id="cb29-9"><a href="#cb29-9"></a></span>
+<span id="cb29-10"><a href="#cb29-10"></a>  <span class="co">-- Get the @n@th element of a list, or 'Nothing'</span></span>
+<span id="cb29-11"><a href="#cb29-11"></a>  <span class="co">-- if the length of the list is smaller than @n@.</span></span>
+<span id="cb29-12"><a href="#cb29-12"></a>  <span class="co">-- As far as I can see, there is no such function</span></span>
+<span id="cb29-13"><a href="#cb29-13"></a>  <span class="co">-- in base.</span></span>
+<span id="cb29-14"><a href="#cb29-14"></a><span class="ot">  nth ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> [a] <span class="ot">-&gt;</span> <span class="dt">Maybe</span> a</span>
+<span id="cb29-15"><a href="#cb29-15"></a>  nth n []     <span class="ot">=</span> <span class="dt">Nothing</span></span>
+<span id="cb29-16"><a href="#cb29-16"></a>  nth <span class="dv">0</span> (x<span class="op">:</span>_)  <span class="ot">=</span> <span class="dt">Just</span> x</span>
+<span id="cb29-17"><a href="#cb29-17"></a>  nth n (x<span class="op">:</span>xs) <span class="ot">=</span> nth (n <span class="op">-</span> <span class="dv">1</span>) xs</span></code></pre></div>
+<p>Having changed <code>Type</code>, we also need to change <code>Term</code>, since terms can contain types. Doing this is very straight-forward and quite boring, but you can view the new definition here:</p>
+<details>
+<p><summary>The updated <code>Term x</code></summary></p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb30-1"><a href="#cb30-1"></a><span class="kw">data</span> <span class="dt">Term</span> x</span>
+<span id="cb30-2"><a href="#cb30-2"></a>  <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="dt">String</span> (<span class="dt">Term</span> x)</span>
+<span id="cb30-3"><a href="#cb30-3"></a>    <span class="co">-- ^ Type abstraction</span></span>
+<span id="cb30-4"><a href="#cb30-4"></a>  <span class="op">|</span> <span class="dt">TmTyApp</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span>
+<span id="cb30-5"><a href="#cb30-5"></a>    <span class="co">-- ^ Type application</span></span>
+<span id="cb30-6"><a href="#cb30-6"></a>  <span class="op">|</span> <span class="dt">TmTrue</span></span>
+<span id="cb30-7"><a href="#cb30-7"></a>    <span class="co">-- ^ True value</span></span>
+<span id="cb30-8"><a href="#cb30-8"></a>  <span class="op">|</span> <span class="dt">TmFalse</span></span>
+<span id="cb30-9"><a href="#cb30-9"></a>    <span class="co">-- ^ False value</span></span>
+<span id="cb30-10"><a href="#cb30-10"></a>  <span class="op">|</span> <span class="dt">TmInt</span> <span class="dt">Integer</span></span>
+<span id="cb30-11"><a href="#cb30-11"></a>    <span class="co">-- ^ Integer value</span></span>
+<span id="cb30-12"><a href="#cb30-12"></a>  <span class="op">|</span> <span class="dt">TmVar</span> <span class="dt">String</span></span>
+<span id="cb30-13"><a href="#cb30-13"></a>    <span class="co">-- ^ Variable</span></span>
+<span id="cb30-14"><a href="#cb30-14"></a>  <span class="op">|</span> <span class="dt">TmAbs</span> <span class="dt">String</span> (<span class="dt">Type</span> x) (<span class="dt">Term</span> x)</span>
+<span id="cb30-15"><a href="#cb30-15"></a>    <span class="co">-- ^ Lambda abstraction</span></span>
+<span id="cb30-16"><a href="#cb30-16"></a>  <span class="op">|</span> <span class="dt">TmApp</span> (<span class="dt">Term</span> x) (<span class="dt">Term</span> x)</span>
+<span id="cb30-17"><a href="#cb30-17"></a>    <span class="co">-- ^ Application</span></span>
+<span id="cb30-18"><a href="#cb30-18"></a>  <span class="op">|</span> <span class="dt">TmAdd</span> (<span class="dt">Term</span> x) (<span class="dt">Term</span> x)</span>
+<span id="cb30-19"><a href="#cb30-19"></a>    <span class="co">-- ^ Addition</span></span>
+<span id="cb30-20"><a href="#cb30-20"></a>  <span class="op">|</span> <span class="dt">TmIf</span> (<span class="dt">Term</span> x) (<span class="dt">Term</span> x) (<span class="dt">Term</span> x)</span>
+<span id="cb30-21"><a href="#cb30-21"></a>    <span class="co">-- ^ If-then-else conditional</span></span>
+<span id="cb30-22"><a href="#cb30-22"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</span></code></pre></div>
+</details>
+<p>The substitution function for types with De Bruijn-indices is as follows:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb31-1"><a href="#cb31-1"></a><span class="ot">subst ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span></span></code></pre></div>
+<p>The simple types are again very simple:</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb32-1"><a href="#cb32-1"></a>subst x ty' <span class="dt">TyBool</span> <span class="ot">=</span> <span class="dt">TyBool</span></span>
+<span id="cb32-2"><a href="#cb32-2"></a>subst x ty' <span class="dt">TyInt</span>  <span class="ot">=</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>For function types, we just apply the substitution left and right:</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb33-1"><a href="#cb33-1"></a>subst x ty' (<span class="dt">TyFun</span> ty1 ty2) <span class="ot">=</span></span>
+<span id="cb33-2"><a href="#cb33-2"></a>  <span class="dt">TyFun</span> (subst x ty' ty1) (subst x ty' ty2)</span></code></pre></div>
+<p>When we see a variable, we only substitute it if <code>x</code> equals <code>y</code>:</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb34-1"><a href="#cb34-1"></a>subst x ty' (<span class="dt">TyVar</span> y)</span>
+<span id="cb34-2"><a href="#cb34-2"></a>  <span class="op">|</span> x <span class="op">==</span> y    <span class="ot">=</span> ty'</span>
+<span id="cb34-3"><a href="#cb34-3"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="dt">TyVar</span> y</span></code></pre></div>
+<p>And here is the tricky bit. A <span class="math inline">\(\forall\)</span> binds a type variable, so to make <code>x</code> still refer to the same <span class="math inline">\(\forall\)</span> it was bound by, we need to increment it by one. But we also need to shift all free type variables in <code>ty'</code> by one, because they will otherwise be bound by a different <span class="math inline">\(\forall\)</span>. (This was the problem we ran into before and can solve using De Bruijn-indices.)</p>
+<div class="sourceCode" id="cb35"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb35-1"><a href="#cb35-1"></a>subst x ty' (<span class="dt">TyForall</span> y ty) <span class="ot">=</span></span>
+<span id="cb35-2"><a href="#cb35-2"></a>  <span class="dt">TyForall</span> y <span class="op">$</span> subst (x <span class="op">+</span> <span class="dv">1</span>) (shift <span class="dv">0</span> <span class="dv">1</span> ty') ty</span></code></pre></div>
+<p>Let’s look at the substitution <span class="math inline">\((\forall X. 0_X \rightarrow 2_Z)[1_Z := 0_Y]\)</span>. We’re working in a context <span class="math inline">\(Z, Y\)</span> so the term <span class="math inline">\(Z\ Y\)</span> should be written like <span class="math inline">\(1_Z\ 0_Y\)</span>. (I’ve added subscripts with the names to make the terms easier to read.) When we see the <span class="math inline">\(\forall X. \ldots\)</span>, another name is bound, so <span class="math inline">\(1\)</span> no longer refers to <span class="math inline">\(Z\)</span> but to <span class="math inline">\(Y\)</span>, and <span class="math inline">\(0\)</span> no longer refers to <span class="math inline">\(Y\)</span> but to <span class="math inline">\(X\)</span>. We need to shift <span class="math inline">\(1_Z\)</span> by one, so it becomes <span class="math inline">\(2_Z\)</span>, and we need to shift <span class="math inline">\(0_Y\)</span> by one, so it becomes <span class="math inline">\(1_Y\)</span>. The above substitution is then equal to <span class="math inline">\(\forall X. (0_X \rightarrow 2_Z)[2_Z := 1_Y]\)</span>. For this substitution, we don’t need to do any shifting, so the result is <span class="math inline">\(\forall X. 0_X \rightarrow 1_Y\)</span>.</p>
+<p>It becomes more complicated when we want to substitute for a polymorphic type that binds some type variables. Let’s say we’re working in the context <span class="math inline">\(Y, B\)</span> and we want to evaluate <span class="math inline">\((\forall A. A \rightarrow B)[B := \forall X. X \rightarrow Y]\)</span>. In De Bruijn-indices, this is: <span class="math inline">\((\forall A. 0_A \rightarrow 1_B)[0_B := \forall X. 0_X \rightarrow 2_Y]\)</span>. We see <span class="math inline">\(\forall A. \ldots\)</span>, so we need to shift the variables in the substitution up by one. Naïvely, we would just increment all type variables by one, so we get: <span class="math inline">\(\ldots[1 := \forall X. 1 \rightarrow 3]\)</span>. I’ve deliberately not written the subscripts, because they have changed. The <span class="math inline">\(0_X\)</span> has become a <span class="math inline">\(1_B\)</span>, so the substitution has become a different one.</p>
+<p>To solve this, we need to keep track of a <em>cutoff</em> (<span class="math inline">\(c\)</span>). This value denotes the ‘depth’ of the type, that is, how many type variables are bound by <span class="math inline">\(\forall\)</span>’s. The function <code>shift c i ty</code> will shift the free type variables above a cutoff <code>c</code> by <code>i</code>:</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb36-1"><a href="#cb36-1"></a><span class="ot">shift ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span></span></code></pre></div>
+<p>There are no free variables in the simple types, so there is nothing to shift:</p>
+<div class="sourceCode" id="cb37"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb37-1"><a href="#cb37-1"></a>shift c i <span class="dt">TyBool</span> <span class="ot">=</span> <span class="dt">TyBool</span></span>
+<span id="cb37-2"><a href="#cb37-2"></a>shift c i <span class="dt">TyInt</span>  <span class="ot">=</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>We shift function types by just shifting recursively:</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb38-1"><a href="#cb38-1"></a>shift c i (<span class="dt">TyFun</span> ty1 ty2) <span class="ot">=</span></span>
+<span id="cb38-2"><a href="#cb38-2"></a>  <span class="dt">TyFun</span> (shift c i ty1) (shift c i ty2)</span></code></pre></div>
+<p>When we see a <span class="math inline">\(\forall\)</span>, we need to increase the cutoff, since there is another bound variable introduced:</p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb39-1"><a href="#cb39-1"></a>shift c i (<span class="dt">TyForall</span> x ty) <span class="ot">=</span></span>
+<span id="cb39-2"><a href="#cb39-2"></a>  <span class="dt">TyForall</span> x <span class="op">$</span> shift (c <span class="op">+</span> <span class="dv">1</span>) i ty</span></code></pre></div>
+<p>And finally, when we come across a variable, we should only shift it when it’s free (and thus not bound). That is the case when the variable is greater than or equal to the cutoff:</p>
+<div class="sourceCode" id="cb40"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb40-1"><a href="#cb40-1"></a>shift c i (<span class="dt">TyVar</span> x) <span class="ot">=</span></span>
+<span id="cb40-2"><a href="#cb40-2"></a>  <span class="kw">if</span> x <span class="op">&lt;</span> c</span>
+<span id="cb40-3"><a href="#cb40-3"></a>   <span class="kw">then</span> <span class="dt">TyVar</span> x</span>
+<span id="cb40-4"><a href="#cb40-4"></a>   <span class="kw">else</span> <span class="dt">TyVar</span> (x <span class="op">+</span> i)</span></code></pre></div>
+<p>Some examples:</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb41-1"><a href="#cb41-1"></a>shift <span class="dv">0</span> <span class="dv">1</span> (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span></span>
+<span id="cb41-2"><a href="#cb41-2"></a>           (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span> <span class="co">{- bound: X -}</span>)</span>
+<span id="cb41-3"><a href="#cb41-3"></a>                  (<span class="dt">TyVar</span> <span class="dv">1</span> <span class="co">{- free -}</span>)))</span>
+<span id="cb41-4"><a href="#cb41-4"></a>  <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">2</span>))</span>
+<span id="cb41-5"><a href="#cb41-5"></a></span>
+<span id="cb41-6"><a href="#cb41-6"></a>shift <span class="dv">0</span> <span class="dv">1</span> (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;Y&quot;</span></span>
+<span id="cb41-7"><a href="#cb41-7"></a>           (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span> <span class="co">{- bound: X -}</span>)</span>
+<span id="cb41-8"><a href="#cb41-8"></a>                  (<span class="dt">TyVar</span> <span class="dv">1</span> <span class="co">{- bound: Y -}</span>))))</span>
+<span id="cb41-9"><a href="#cb41-9"></a>  <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;Y&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">1</span>)))</span></code></pre></div>
+<p>And let’s try the substitutions we’ve seen above. <span class="math inline">\((\forall X. 0_X \rightarrow 2_Z)[1_Z := 0_Y]\)</span>:</p>
+<div class="sourceCode" id="cb42"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb42-1"><a href="#cb42-1"></a>subst <span class="dv">1</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">2</span>)))</span>
+<span id="cb42-2"><a href="#cb42-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">1</span>))</span></code></pre></div>
+<p>That is: <span class="math inline">\(\forall X. 0_X \rightarrow 1_Y\)</span>.</p>
+<p>And <span class="math inline">\((\forall A. 0_A \rightarrow 1_B)[0_B := \forall X. 0_X \rightarrow 2_Y]\)</span>:</p>
+<div class="sourceCode" id="cb43"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb43-1"><a href="#cb43-1"></a>subst <span class="dv">0</span> (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">2</span>))) (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">1</span>)))</span>
+<span id="cb43-2"><a href="#cb43-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">3</span>))))</span></code></pre></div>
+<p>That is: <span class="math inline">\(\forall A. 0_A \rightarrow (\forall X. 0_X \rightarrow 3_Y)\)</span>.</p>
+<h2 id="type-checking-again">Type checking, again</h2>
+<p>Now we have written our definition of substitutions, we can <em>almost</em> move on to implementing the type checker. But first, we need to turn the <code>Term String</code>s into <code>Term Int</code>s. Note that we only use De Bruijn-indices for types, so terms still use variables with a string name:</p>
+<div class="sourceCode" id="cb44"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb44-1"><a href="#cb44-1"></a><span class="ot">deBruijnTerm ::</span> [<span class="dt">String</span>] <span class="ot">-&gt;</span> <span class="dt">Term</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> <span class="dt">String</span> (<span class="dt">Term</span> <span class="dt">Int</span>)</span>
+<span id="cb44-2"><a href="#cb44-2"></a>deBruijnTerm ctx <span class="dt">TmTrue</span> <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TmTrue</span></span>
+<span id="cb44-3"><a href="#cb44-3"></a>deBruijnTerm ctx <span class="dt">TmFalse</span> <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TmFalse</span></span>
+<span id="cb44-4"><a href="#cb44-4"></a>deBruijnTerm ctx (<span class="dt">TmInt</span> n) <span class="ot">=</span> <span class="dt">Right</span> (<span class="dt">TmInt</span> n)</span>
+<span id="cb44-5"><a href="#cb44-5"></a>deBruijnTerm ctx (<span class="dt">TmVar</span> x) <span class="ot">=</span> <span class="dt">Right</span> (<span class="dt">TmVar</span> x)</span></code></pre></div>
+<p>Type abstractions introduce a type variable, so we should add it to the context:</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb45-1"><a href="#cb45-1"></a>deBruijnTerm ctx (<span class="dt">TmTyAbs</span> x t) <span class="ot">=</span> <span class="dt">TmTyAbs</span> x <span class="op">&lt;$&gt;</span> deBruijnTerm (x <span class="op">:</span> ctx) t</span>
+<span id="cb45-2"><a href="#cb45-2"></a>deBruijnTerm ctx (<span class="dt">TmTyApp</span> t ty) <span class="ot">=</span> <span class="dt">TmTyApp</span> <span class="op">&lt;$&gt;</span> deBruijnTerm ctx t <span class="op">&lt;*&gt;</span> deBruijn ctx ty</span>
+<span id="cb45-3"><a href="#cb45-3"></a>deBruijnTerm ctx (<span class="dt">TmAbs</span> x ty t) <span class="ot">=</span> <span class="dt">TmAbs</span> x <span class="op">&lt;$&gt;</span> deBruijn ctx ty <span class="op">&lt;*&gt;</span> deBruijnTerm ctx t</span>
+<span id="cb45-4"><a href="#cb45-4"></a>deBruijnTerm ctx (<span class="dt">TmApp</span> t1 t2) <span class="ot">=</span> <span class="dt">TmApp</span> <span class="op">&lt;$&gt;</span> deBruijnTerm ctx t1 <span class="op">&lt;*&gt;</span> deBruijnTerm ctx t2</span>
+<span id="cb45-5"><a href="#cb45-5"></a>deBruijnTerm ctx (<span class="dt">TmAdd</span> t1 t2) <span class="ot">=</span> <span class="dt">TmAdd</span> <span class="op">&lt;$&gt;</span> deBruijnTerm ctx t1 <span class="op">&lt;*&gt;</span> deBruijnTerm ctx t2</span>
+<span id="cb45-6"><a href="#cb45-6"></a>deBruijnTerm ctx (<span class="dt">TmIf</span> t1 t2 t3) <span class="ot">=</span> <span class="dt">TmIf</span> <span class="op">&lt;$&gt;</span> deBruijnTerm ctx t1 <span class="op">&lt;*&gt;</span> deBruijnTerm ctx t2 <span class="op">&lt;*&gt;</span> deBruijnTerm ctx t3</span></code></pre></div>
+<p>Some examples:</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb46-1"><a href="#cb46-1"></a>deBruijnTerm [] tmId</span>
+<span id="cb46-2"><a href="#cb46-2"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;x&quot;</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TmVar</span> <span class="st">&quot;x&quot;</span>)))</span>
+<span id="cb46-3"><a href="#cb46-3"></a></span>
+<span id="cb46-4"><a href="#cb46-4"></a>deBruijnTerm [] tmConst</span>
+<span id="cb46-5"><a href="#cb46-5"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;a&quot;</span> (<span class="dt">TyVar</span> <span class="dv">1</span>) (<span class="dt">TmAbs</span> <span class="st">&quot;b&quot;</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TmVar</span> <span class="st">&quot;a&quot;</span>)))))</span>
+<span id="cb46-6"><a href="#cb46-6"></a></span>
+<span id="cb46-7"><a href="#cb46-7"></a>deBruijnTerm [] tmConstFlip</span>
+<span id="cb46-8"><a href="#cb46-8"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;a&quot;</span> (<span class="dt">TyVar</span> <span class="dv">1</span>) (<span class="dt">TmAbs</span> <span class="st">&quot;b&quot;</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TmVar</span> <span class="st">&quot;a&quot;</span>))))) (<span class="dt">TyVar</span> <span class="dv">0</span>)) (<span class="dt">TyVar</span> <span class="dv">1</span>))))</span></code></pre></div>
+<p>Now we can implement the type checker:</p>
+<div class="sourceCode" id="cb47"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb47-1"><a href="#cb47-1"></a><span class="kw">type</span> <span class="dt">Context</span> <span class="ot">=</span> <span class="dt">Map</span> <span class="dt">String</span> (<span class="dt">Type</span> <span class="dt">Int</span>)</span>
+<span id="cb47-2"><a href="#cb47-2"></a></span>
+<span id="cb47-3"><a href="#cb47-3"></a><span class="ot">typeOf ::</span> <span class="dt">Context</span> <span class="ot">-&gt;</span> <span class="dt">Term</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> (<span class="dt">TypeError</span> <span class="dt">Int</span>) (<span class="dt">Type</span> <span class="dt">Int</span>)</span></code></pre></div>
+<details>
+<p><summary>The definition of <code>TypeError</code></summary></p>
+<div class="sourceCode" id="cb48"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb48-1"><a href="#cb48-1"></a><span class="kw">data</span> <span class="dt">TypeError</span> x</span></code></pre></div>
+<p>The variable was not bound by a lambda abstraction.</p>
+<div class="sourceCode" id="cb49"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb49-1"><a href="#cb49-1"></a>  <span class="ot">=</span> <span class="dt">UnboundVariable</span> <span class="dt">String</span></span></code></pre></div>
+<p>An operand of an addition term was not an integer.</p>
+<div class="sourceCode" id="cb50"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb50-1"><a href="#cb50-1"></a>  <span class="op">|</span> <span class="dt">AdditionNonInteger</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span></code></pre></div>
+<p>The condition of an if-then-else term is not a boolean.</p>
+<div class="sourceCode" id="cb51"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb51-1"><a href="#cb51-1"></a>  <span class="op">|</span> <span class="dt">NonBooleanCondition</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span></code></pre></div>
+<p>The arms of an if-then-else term have different types.</p>
+<div class="sourceCode" id="cb52"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb52-1"><a href="#cb52-1"></a>  <span class="op">|</span> <span class="dt">ArmsOfDifferentType</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x) (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span></code></pre></div>
+<p>A function is applied to an argument of the wrong type.</p>
+<div class="sourceCode" id="cb53"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb53-1"><a href="#cb53-1"></a>  <span class="op">|</span> <span class="dt">ApplicationWrongArgumentType</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x) (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span></code></pre></div>
+<p>A term of a non-function type is the left part of an application.</p>
+<div class="sourceCode" id="cb54"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb54-1"><a href="#cb54-1"></a>  <span class="op">|</span> <span class="dt">ApplicationNotFunction</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span></code></pre></div>
+<p>A type is applied to a term with a non-polymorphic type.</p>
+<div class="sourceCode" id="cb55"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb55-1"><a href="#cb55-1"></a>  <span class="op">|</span> <span class="dt">TypeApplicationNonPolymorphic</span> (<span class="dt">Term</span> x) (<span class="dt">Type</span> x)</span>
+<span id="cb55-2"><a href="#cb55-2"></a>  <span class="kw">deriving</span> (<span class="dt">Show</span>)</span></code></pre></div>
+</details>
+<p>Type checking a type abstraction is still pretty simple:</p>
+<div class="sourceCode" id="cb56"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb56-1"><a href="#cb56-1"></a>typeOf ctx (<span class="dt">TmTyAbs</span> x t) <span class="ot">=</span> <span class="dt">TyForall</span> x <span class="op">&lt;$&gt;</span> typeOf ctx t</span></code></pre></div>
+<p>But type checking a type application is a bit more involved. We don’t just apply the substitution, but do some shifting around it. With the pattern matching, we assert that <code>ty1</code> is of the form <span class="math inline">\(\forall X. \mathsf{ty12}\)</span> for some type variable <span class="math inline">\(X\)</span> and some type <span class="math inline">\(\mathsf{ty12}\)</span>. We need to shift <span class="math inline">\(\mathsf{ty2}\)</span> up, because its context is one smaller than the context of <span class="math inline">\(\mathsf{ty12}\)</span>. And we need to shift <span class="math inline">\(\mathsf{ty12}\)</span> one down after the substitution, because we have removed <span class="math inline">\(X\)</span> from the context by pattern matching on <code>ty1</code>:</p>
+<div class="sourceCode" id="cb57"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb57-1"><a href="#cb57-1"></a>typeOf ctx (<span class="dt">TmTyApp</span> t1 ty2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb57-2"><a href="#cb57-2"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb57-3"><a href="#cb57-3"></a>  <span class="kw">case</span> ty1 <span class="kw">of</span></span>
+<span id="cb57-4"><a href="#cb57-4"></a>    <span class="dt">TyForall</span> x ty12 <span class="ot">-&gt;</span> <span class="dt">Right</span> <span class="op">$</span></span>
+<span id="cb57-5"><a href="#cb57-5"></a>      shift <span class="dv">0</span> (<span class="op">-</span><span class="dv">1</span>) (subst <span class="dv">0</span> (shift <span class="dv">0</span> <span class="dv">1</span> ty2) ty12)</span>
+<span id="cb57-6"><a href="#cb57-6"></a>    _ <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">TypeApplicationNonPolymorphic</span> t1 ty1</span></code></pre></div>
+<p>Most of <code>typeOf</code> is still the same:</p>
+<details>
+<p><summary>Most of <code>typeOf</code></summary></p>
+<div class="sourceCode" id="cb58"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb58-1"><a href="#cb58-1"></a>typeOf ctx <span class="dt">TmTrue</span>    <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb58-2"><a href="#cb58-2"></a>typeOf ctx <span class="dt">TmFalse</span>   <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyBool</span></span>
+<span id="cb58-3"><a href="#cb58-3"></a>typeOf ctx (<span class="dt">TmInt</span> n) <span class="ot">=</span> <span class="dt">Right</span> <span class="dt">TyInt</span></span>
+<span id="cb58-4"><a href="#cb58-4"></a>typeOf ctx (<span class="dt">TmVar</span> x) <span class="ot">=</span></span>
+<span id="cb58-5"><a href="#cb58-5"></a>  <span class="kw">case</span> Map.lookup x ctx <span class="kw">of</span></span>
+<span id="cb58-6"><a href="#cb58-6"></a>    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">UnboundVariable</span> x</span>
+<span id="cb58-7"><a href="#cb58-7"></a>    <span class="dt">Just</span> ty <span class="ot">-&gt;</span> <span class="dt">Right</span> ty</span>
+<span id="cb58-8"><a href="#cb58-8"></a>typeOf ctx (<span class="dt">TmAbs</span> x ty t) <span class="ot">=</span></span>
+<span id="cb58-9"><a href="#cb58-9"></a>  <span class="kw">let</span> ctx' <span class="ot">=</span> Map.insert x ty ctx</span>
+<span id="cb58-10"><a href="#cb58-10"></a>      ty'  <span class="ot">=</span> typeOf ctx' t</span>
+<span id="cb58-11"><a href="#cb58-11"></a>   <span class="kw">in</span> <span class="dt">TyFun</span> ty <span class="op">&lt;$&gt;</span> ty'</span>
+<span id="cb58-12"><a href="#cb58-12"></a>typeOf ctx (<span class="dt">TmAdd</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb58-13"><a href="#cb58-13"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb58-14"><a href="#cb58-14"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb58-15"><a href="#cb58-15"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t1 ty1</span>
+<span id="cb58-16"><a href="#cb58-16"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb58-17"><a href="#cb58-17"></a>  when (ty2 <span class="op">/=</span> <span class="dt">TyInt</span>) <span class="op">$</span></span>
+<span id="cb58-18"><a href="#cb58-18"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">AdditionNonInteger</span> t2 ty2</span>
+<span id="cb58-19"><a href="#cb58-19"></a>  <span class="dt">Right</span> <span class="dt">TyInt</span></span></code></pre></div>
+</details>
+<p>But we also have to update how we type check normal applications and if-then-else terms. To check whether the argument type matches the parameter type of the left-hand side, we test whether they are equal. Similarly, for if-then-else terms we check whether the types of the arms are equal. But the <code>Eq</code> instance for <code>Type</code>s is derived, so two polymorphic types <code>TyForall x ty1</code> and <code>TyForall y ty2</code> are equal if and only if <code>x == y</code> and <code>ty1 == ty2</code>. But <span class="math inline">\(\forall X. 0_X\)</span> and <span class="math inline">\(\forall Y. 0_Y\)</span> are clearly the same type. So we can just ignore the first parameter of <code>TyForall</code> when comparing them since we are using De Bruijn-indices which don’t have to be renamed. We’ll use the <code>tyEq</code> function for testing whether two types are equal<a href="#fn7" class="footnote-ref" id="fnref7" role="doc-noteref"><sup>7</sup></a>:</p>
+<div class="sourceCode" id="cb59"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb59-1"><a href="#cb59-1"></a>typeOf ctx (<span class="dt">TmApp</span> t1 t2) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb59-2"><a href="#cb59-2"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb59-3"><a href="#cb59-3"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb59-4"><a href="#cb59-4"></a>  <span class="kw">case</span> ty1 <span class="kw">of</span></span>
+<span id="cb59-5"><a href="#cb59-5"></a>    <span class="dt">TyFun</span> ty11 ty12 <span class="ot">-&gt;</span></span>
+<span id="cb59-6"><a href="#cb59-6"></a>      <span class="kw">if</span> tyEq ty2 ty11</span>
+<span id="cb59-7"><a href="#cb59-7"></a>        <span class="kw">then</span> <span class="dt">Right</span> ty12</span>
+<span id="cb59-8"><a href="#cb59-8"></a>        <span class="kw">else</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationWrongArgumentType</span> t1 ty1 t2 ty2</span>
+<span id="cb59-9"><a href="#cb59-9"></a>    _ <span class="ot">-&gt;</span> <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ApplicationNotFunction</span> t1 ty1</span>
+<span id="cb59-10"><a href="#cb59-10"></a></span>
+<span id="cb59-11"><a href="#cb59-11"></a>typeOf ctx (<span class="dt">TmIf</span> t1 t2 t3) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb59-12"><a href="#cb59-12"></a>  ty1 <span class="ot">&lt;-</span> typeOf ctx t1</span>
+<span id="cb59-13"><a href="#cb59-13"></a>  when (ty1 <span class="op">/=</span> <span class="dt">TyBool</span>) <span class="op">$</span></span>
+<span id="cb59-14"><a href="#cb59-14"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">NonBooleanCondition</span> t1 ty1</span>
+<span id="cb59-15"><a href="#cb59-15"></a>  ty2 <span class="ot">&lt;-</span> typeOf ctx t2</span>
+<span id="cb59-16"><a href="#cb59-16"></a>  ty3 <span class="ot">&lt;-</span> typeOf ctx t3</span>
+<span id="cb59-17"><a href="#cb59-17"></a>  when (<span class="fu">not</span> (tyEq ty2 ty3)) <span class="op">$</span></span>
+<span id="cb59-18"><a href="#cb59-18"></a>    <span class="dt">Left</span> <span class="op">$</span> <span class="dt">ArmsOfDifferentType</span> t2 ty2 t3 ty3</span>
+<span id="cb59-19"><a href="#cb59-19"></a>  <span class="dt">Right</span> ty2</span>
+<span id="cb59-20"><a href="#cb59-20"></a></span>
+<span id="cb59-21"><a href="#cb59-21"></a><span class="ot">tyEq ::</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb59-22"><a href="#cb59-22"></a>tyEq (<span class="dt">TyVar</span> x) (<span class="dt">TyVar</span> y)                 <span class="ot">=</span> x <span class="op">==</span> y</span>
+<span id="cb59-23"><a href="#cb59-23"></a>tyEq (<span class="dt">TyForall</span> _ ty1) (<span class="dt">TyForall</span> _ ty2)   <span class="ot">=</span> tyEq ty1 ty2</span>
+<span id="cb59-24"><a href="#cb59-24"></a>tyEq (<span class="dt">TyFun</span> ty11 ty12) (<span class="dt">TyFun</span> ty21 ty22) <span class="ot">=</span> tyEq ty11 ty21 <span class="op">&amp;&amp;</span> tyEq ty12 ty22</span>
+<span id="cb59-25"><a href="#cb59-25"></a>tyEq <span class="dt">TyBool</span> <span class="dt">TyBool</span>                       <span class="ot">=</span> <span class="dt">True</span></span>
+<span id="cb59-26"><a href="#cb59-26"></a>tyEq <span class="dt">TyInt</span> <span class="dt">TyInt</span>                         <span class="ot">=</span> <span class="dt">True</span></span>
+<span id="cb59-27"><a href="#cb59-27"></a>tyEq _ _                                 <span class="ot">=</span> <span class="dt">False</span></span></code></pre></div>
+<p>And with that, we should have a working type checker for the polymorphic lambda calculus! Let’s try it:</p>
+<div class="sourceCode" id="cb60"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb60-1"><a href="#cb60-1"></a><span class="kw">let</span> <span class="dt">Right</span> tmConstDB <span class="ot">=</span> deBruijnTerm [] tmConst</span>
+<span id="cb60-2"><a href="#cb60-2"></a> <span class="kw">in</span> typeOf Map.empty tmConstDB</span>
+<span id="cb60-3"><a href="#cb60-3"></a>  <span class="ot">=&gt;</span> <span class="dt">Right</span> (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">1</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">1</span>)))))</span></code></pre></div>
+<p>We can also <code>restore</code> the term:</p>
+<div class="sourceCode" id="cb61"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb61-1"><a href="#cb61-1"></a><span class="kw">let</span> <span class="dt">Right</span> tmDB <span class="ot">=</span> deBruijnTerm [] tmConst</span>
+<span id="cb61-2"><a href="#cb61-2"></a>    <span class="dt">Right</span> ty   <span class="ot">=</span> typeOf Map.empty tmDB</span>
+<span id="cb61-3"><a href="#cb61-3"></a> <span class="kw">in</span> restore ty</span>
+<span id="cb61-4"><a href="#cb61-4"></a>  <span class="ot">=&gt;</span> <span class="dt">Just</span> (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span></span>
+<span id="cb61-5"><a href="#cb61-5"></a>           (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)</span>
+<span id="cb61-6"><a href="#cb61-6"></a>                  (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)</span>
+<span id="cb61-7"><a href="#cb61-7"></a>                         (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)))))</span></code></pre></div>
+<p><span class="math inline">\(\mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow A\)</span>, just what we expected!</p>
+<p>Now let’s try <span class="math inline">\(\mathsf{constFlip}\)</span>, which failed previously:</p>
+<div class="sourceCode" id="cb62"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb62-1"><a href="#cb62-1"></a><span class="kw">let</span> <span class="dt">Right</span> tmDB <span class="ot">=</span> deBruijnTerm [] tmConstFlip</span>
+<span id="cb62-2"><a href="#cb62-2"></a>    <span class="dt">Right</span> ty   <span class="ot">=</span> typeOf Map.empty tmDB</span>
+<span id="cb62-3"><a href="#cb62-3"></a> <span class="kw">in</span> restore ty</span>
+<span id="cb62-4"><a href="#cb62-4"></a>  <span class="ot">=&gt;</span> <span class="dt">Just</span> (<span class="dt">TyForall</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span></span>
+<span id="cb62-5"><a href="#cb62-5"></a>           (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)</span>
+<span id="cb62-6"><a href="#cb62-6"></a>                  (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span>)</span>
+<span id="cb62-7"><a href="#cb62-7"></a>                         (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)))))</span></code></pre></div>
+<p><span class="math inline">\(\mathsf{constFlip} : \forall A. \forall B. B \rightarrow A \rightarrow B\)</span>, hurray!</p>
+<p>And let’s also check that we can apply polymorphic functions, <span class="math inline">\((\lambda \mathsf{id} : (\forall X. X \rightarrow X). \mathsf{id}\ \mathsf{Int}\ 6)\ (\Lambda Y. \lambda y : Y. y)\)</span>:</p>
+<div class="sourceCode" id="cb63"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb63-1"><a href="#cb63-1"></a><span class="kw">let</span> tm <span class="ot">=</span> <span class="dt">TmApp</span></span>
+<span id="cb63-2"><a href="#cb63-2"></a>           (<span class="dt">TmAbs</span> <span class="st">&quot;id&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;X&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;X&quot;</span>)))</span>
+<span id="cb63-3"><a href="#cb63-3"></a>             (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmVar</span> <span class="st">&quot;id&quot;</span>) <span class="dt">TyInt</span>) (<span class="dt">TmInt</span> <span class="dv">6</span>)))</span>
+<span id="cb63-4"><a href="#cb63-4"></a>           (<span class="dt">TmTyAbs</span> <span class="st">&quot;Y&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;y&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;Y&quot;</span>) (<span class="dt">TmVar</span> <span class="st">&quot;y&quot;</span>)))</span>
+<span id="cb63-5"><a href="#cb63-5"></a>    <span class="dt">Right</span> tmDB <span class="ot">=</span> deBruijnTerm [] tm</span>
+<span id="cb63-6"><a href="#cb63-6"></a>    <span class="dt">Right</span> ty <span class="ot">=</span> typeOf Map.empty tmDB</span>
+<span id="cb63-7"><a href="#cb63-7"></a> <span class="kw">in</span> ty</span>
+<span id="cb63-8"><a href="#cb63-8"></a>  <span class="ot">=&gt;</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p>Cool! (Writing this example, I wished I had written a parser…)</p>
+<p>Note, however, that restoring does not always work:</p>
+<div class="sourceCode" id="cb64"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb64-1"><a href="#cb64-1"></a><span class="kw">let</span> tm <span class="ot">=</span> <span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmTyApp</span> tmConst (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>))</span>
+<span id="cb64-2"><a href="#cb64-2"></a>    <span class="dt">Right</span> tmDB <span class="ot">=</span> deBruijnTerm [] tm</span>
+<span id="cb64-3"><a href="#cb64-3"></a>    <span class="dt">Right</span> ty <span class="ot">=</span> typeOf Map.empty tmDB</span>
+<span id="cb64-4"><a href="#cb64-4"></a> <span class="kw">in</span> (ty, restore ty)</span>
+<span id="cb64-5"><a href="#cb64-5"></a>  <span class="ot">=&gt;</span> ( <span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">1</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="dv">0</span>) (<span class="dt">TyVar</span> <span class="dv">1</span>))))</span>
+<span id="cb64-6"><a href="#cb64-6"></a>     , <span class="dt">Just</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyForall</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TyFun</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>) (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span>)))))</span>
+<span id="cb64-7"><a href="#cb64-7"></a>     )</span></code></pre></div>
+<p>The first type, using De Bruijn-indices, is correct: <span class="math inline">\(\forall B. \forall B. 1_B \rightarrow 0_B \rightarrow 1_B\)</span>. The second, restored type, however, is: <span class="math inline">\(\forall B. \forall B. B \rightarrow B \rightarrow B\)</span>. If we turn this into a <code>Type Int</code>, we get <span class="math inline">\(\forall B. \forall B. 0_B \rightarrow 0_B \rightarrow 0_B\)</span>, which is not equal to the original. To solve this, you would need to do some renaming.</p>
+<p>Some more examples:</p>
+<div class="sourceCode" id="cb65"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb65-1"><a href="#cb65-1"></a><span class="ot">everything ::</span> <span class="dt">Term</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Type</span> <span class="dt">String</span></span>
+<span id="cb65-2"><a href="#cb65-2"></a>everything <span class="ot">=</span> fromJust <span class="op">.</span> restore <span class="op">.</span> fromRight oops <span class="op">.</span> typeOf Map.empty <span class="op">.</span> fromRight oops <span class="op">.</span> deBruijnTerm []</span>
+<span id="cb65-3"><a href="#cb65-3"></a> <span class="kw">where</span></span>
+<span id="cb65-4"><a href="#cb65-4"></a>  oops <span class="ot">=</span> <span class="fu">error</span> <span class="st">&quot;everything: expected Right but found Left&quot;</span></span></code></pre></div>
+<p><span class="math inline">\(\mathsf{id}\ \mathsf{Bool}\ \mathsf{True}\)</span>:</p>
+<div class="sourceCode" id="cb66"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb66-1"><a href="#cb66-1"></a>everything (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> tmId <span class="dt">TyBool</span>) <span class="dt">TmTrue</span>)</span>
+<span id="cb66-2"><a href="#cb66-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyBool</span></span></code></pre></div>
+<p><span class="math inline">\(\mathsf{const}\ \mathsf{Int}\ (\mathsf{Int} \rightarrow \mathsf{Bool})\ (10 + 20)\ (\mathsf{const}\ \mathsf{Bool}\ \mathsf{Int}\ \mathsf{False})\)</span>:</p>
+<div class="sourceCode" id="cb67"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb67-1"><a href="#cb67-1"></a>everything (<span class="dt">TmApp</span> (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> tmConst <span class="dt">TyInt</span>) (<span class="dt">TyFun</span> <span class="dt">TyInt</span> <span class="dt">TyBool</span>)) (<span class="dt">TmAdd</span> (<span class="dt">TmInt</span> <span class="dv">10</span>) (<span class="dt">TmInt</span> <span class="dv">20</span>))) (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmTyApp</span> tmConst <span class="dt">TyBool</span>) <span class="dt">TyInt</span>) <span class="dt">TmFalse</span>))</span>
+<span id="cb67-2"><a href="#cb67-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyInt</span></span></code></pre></div>
+<p><span class="math inline">\((\mathbf{if}\ \mathsf{False}\ \mathbf{then}\ (\Lambda A. \lambda a : A. a)\ \mathbf{else}\ (\Lambda B. \lambda b : B. b))\ \mathsf{Int}\ 5\)</span></p>
+<div class="sourceCode" id="cb68"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb68-1"><a href="#cb68-1"></a>everything (<span class="dt">TmApp</span> (<span class="dt">TmTyApp</span> (<span class="dt">TmIf</span> <span class="dt">TmFalse</span> (<span class="dt">TmTyAbs</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;a&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;A&quot;</span> (<span class="dt">TmVar</span> <span class="st">&quot;a&quot;</span>)))) (<span class="dt">TmTyAbs</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmAbs</span> <span class="st">&quot;b&quot;</span> (<span class="dt">TyVar</span> <span class="st">&quot;B&quot;</span> (<span class="dt">TmVar</span> <span class="st">&quot;b&quot;</span>))))) <span class="dt">TyInt</span>) (<span class="dt">TyInt</span> <span class="dv">5</span>))</span>
+<span id="cb68-2"><a href="#cb68-2"></a>  <span class="ot">=&gt;</span> <span class="dt">TyInt</span></span></code></pre></div>
+<h2 id="conclusion">Conclusion</h2>
+<p>We have explored the polymorphic lambda calculus (or System F), which allows for more abstraction than the simply typed lambda calculus. We have met the trouble of substitution, and we have seen how we can solve it using De Bruijn-indices.</p>
+<p>Most <a href="../posts/2020-05-24-Simply-typed-lambda.html#conclusion">exercises for the STLC</a> can also be applied to the polymorphic lambda calculus. Some other exercises:</p>
+<ol type="1">
+<li>Add a pair type (tuple with two elements) with a constructor (you could use <span class="math inline">\((t, t')\)</span> if you’re writing a parser; otherwise it doesn’t really matter for the abstract syntax tree) and <code>fst</code> and <code>snd</code> to project elements out of the pair. Write the typing rules and extend the type checker.</li>
+<li>Write a <code>restore</code> function that works on all types with De Bruijn-indices. You would need to keep track of the context, i.e., what type variables are used. And you need to be able to generate fresh type variables; you can try to add primes (<code>'</code>) to the first parameter of <code>TyForall</code> until the name is not bound in the context, for example.</li>
+</ol>
+<p>In the next post, I will explore <em>type inference</em>, which will allow us to eliminate <em>all</em> types in the syntax of terms. No more <span class="math inline">\(\mathsf{const} = \Lambda A. \Lambda B. \lambda a : A. \lambda b : B. a\)</span>, but just <span class="math inline">\(\mathsf{const} = \lambda a. \lambda b. a\)</span>. And instead of <span class="math inline">\(\mathsf{const}\ \mathsf{Int}\ \mathsf{Bool}\ 19\ \mathsf{True}\)</span>, we will write just <span class="math inline">\(\mathsf{const}\ 19\ \mathsf{True}\)</span>.</p>
+<h3 id="further-reading">Further reading</h3>
+<p>If you want to read more about De Bruijn-indices, shifting and substitution, you might find the following resources useful:</p>
+<ul>
+<li><a href="https://www.cs.cornell.edu/courses/cs4110/2018fa/lectures/lecture15.pdf"><em>CS 4110 – Programming Languages and Logics Lecture #15: De Bruijn, Combinators, Encodings</em></a></li>
+<li><a href="https://www.cis.upenn.edu/~bcpierce/tapl/"><em>Types and Programming Languages</em></a>, Benjamin C. Pierce, Chapter 6.</li>
+</ul>
+<p>These resources are about using De Bruijn-indices in the untyped lambda calculus, but this knowledge can also be applied to types. If you find shifting and substitution for De Bruijn-indices a bit hard to grasp (I did when I first learnt about them), I recommend you try to work out some examples by hand.</p>
+<section class="footnotes" role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1" role="doc-endnote"><p>Making a mistake writing the identity function is perhaps a bit silly. But in more complex programs, such as a sorting function, this could very well happen.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn2" role="doc-endnote"><p>With the <a href="https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/glasgow_exts.html#extension-TypeApplications"><code>TypeApplications</code> extension</a>.<a href="#fnref2" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn3" role="doc-endnote"><p>You might notice that I don’t specify the types of these examples, i.e., I don’t write <code>tmId :: Term</code>. I haven’t forgotten them, but I purposefully omitted them. You’ll later see why.<a href="#fnref3" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn4" role="doc-endnote"><p>There is also another problem: the definition of <code>(==)</code> for types isn’t correct. We will later fix that problem.<a href="#fnref4" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn5" role="doc-endnote"><p>It is also common to start counting from one, but since we will use lists and their indices (which in Haskell’s <code>Prelude</code> start from zero), it is more convenient to start counting from zero.<a href="#fnref5" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn6" role="doc-endnote"><p>The <code>restore</code> function does not work in general, but it should work on types generated by <code>deBruijn</code>. An example that doesn’t work: <span class="math inline">\(\forall X. \forall X. 0 \rightarrow 1\)</span>. Both <span class="math inline">\(0\)</span> and <span class="math inline">\(1\)</span> will be replaced by <span class="math inline">\(X\)</span>, and they will both refer to the inner <span class="math inline">\(X\)</span>, but the <span class="math inline">\(1\)</span> should refer to the outer <span class="math inline">\(X\)</span>.<a href="#fnref6" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn7" role="doc-endnote"><p>Testing whether a type is equal to <code>TyBool</code> or <code>TyInt</code> can still be done using <code>(==)</code>.<a href="#fnref7" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+  </section>
+</article>
+
+    </main>
+
+    <footer>
+      Site proudly generated by
+      <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+    </footer>
+
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  </body>
+</html>
