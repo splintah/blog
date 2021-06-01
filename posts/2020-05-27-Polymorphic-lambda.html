@@ -297,7 +297,7 @@
 <p>Indeed, we’ve made a mistake, namely in our definition of <code>subst</code>. Let’s look at the type checking process of <span class="math inline">\(\mathsf{constFlip}\)</span>. The first step is:</p>
 <p><span class="math display">\[
   \text{T-TyApp: } \frac{
-    \Gamma \vdash \mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow B
+    \Gamma \vdash \mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow A
   }{
     \Gamma \vdash \mathsf{const}\ B : (\forall B. A \rightarrow B \rightarrow A)[A := B]
   }

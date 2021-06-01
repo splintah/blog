@@ -913,7 +913,7 @@ Looks good!
 <p>Indeed, we’ve made a mistake, namely in our definition of <code>subst</code>. Let’s look at the type checking process of <span class="math inline">\(\mathsf{constFlip}\)</span>. The first step is:</p>
 <p><span class="math display">\[
   \text{T-TyApp: } \frac{
-    \Gamma \vdash \mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow B
+    \Gamma \vdash \mathsf{const} : \forall A. \forall B. A \rightarrow B \rightarrow A
   }{
     \Gamma \vdash \mathsf{const}\ B : (\forall B. A \rightarrow B \rightarrow A)[A := B]
   }
@@ -1511,7 +1511,7 @@ Looks good!
 <p>…, and return the function type from <code>ty</code> to <code>ty'</code>:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb21-1"><a href="#cb21-1"></a>   <span class="kw">in</span> <span class="dt">TyFun</span> ty <span class="op">&lt;$&gt;</span> ty&#39;</span></code></pre></div>
 <p>(Note that <code>TyFun ty &lt;$&gt; ty'</code> is the same as:</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb22-1"><a href="#cb22-1"></a><span class="kw">case</span> typeOf ctx&#39; t <span class="kw">of</span></span>
+<div class="sourceCode" id="cb22"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb22-1"><a href="#cb22-1"></a><span class="kw">case</span> typeOf ctx&#39; ty <span class="kw">of</span></span>
 <span id="cb22-2"><a href="#cb22-2"></a>  <span class="dt">Left</span> e    <span class="ot">-&gt;</span> <span class="dt">Left</span> e</span>
 <span id="cb22-3"><a href="#cb22-3"></a>  <span class="dt">Right</span> ty&#39; <span class="ot">-&gt;</span> <span class="dt">Right</span> (<span class="dt">TyFun</span> ty ty&#39;)</span></code></pre></div>
 <p>But using the fact that <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Either"><code>Either</code></a> is a <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#t:Functor"><code>Functor</code></a> allows us to use <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#v:fmap"><code>fmap</code></a>, or the infix version <a href="https://hackage.haskell.org/package/base/docs/Prelude.html#v:-60--36--62-"><code>(&lt;$&gt;)</code></a>. This is more succinct that an explicit <code>case</code>-<code>of</code>.</p>
